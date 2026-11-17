@@ -1,3 +1,6 @@
+---
+# 대표 프로젝트 목록은 projects/*/index.html 머리말과 projects.html 의 extra_projects 에서 자동 생성
+---
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -155,12 +158,12 @@
         <a href="projects.html" class="btn-link">전체 프로젝트 보기 →</a>
       </div>
       <ul>
-        <li><span class="highlight">AbuseIPDB Apache 차단</span> — API로 블랙리스트 수집 → 2.2/2.4 규칙 자동 생성</li>
-        <li><span class="highlight">서버 장애 감지 알림</span> — 리소스·프로세스·포트 점검 → Slack/SMS 알림</li>
-        <li><span class="highlight">ModSecurity WAF 페이지</span> — 차단 사유 표시 + 해제 요청 폼 구축</li>
-        <li><span class="highlight">SSL 리버스 프록시</span> — 인증서 집중 관리 및 백엔드 HTTP 전환</li>
-        <li><span class="highlight">Elasticsearch 모니터링</span> — Metricbeat로 Linux·Windows 메트릭 통합 대시보드</li>
-        <li><span class="highlight">중앙 인증</span> — SSSD + LDAP/AD + RADIUS로 SSH 로그인 계정 통합</li>
+        {% assign projects_page = site.pages | where: "name", "projects.html" | first %}
+        {% assign project_pages = site.pages | where: "type", "project" %}
+        {% assign projects = project_pages | concat: projects_page.extra_projects | sort: "order" %}
+        {% for p in projects %}{% if p.featured %}
+        <li><span class="highlight">{{ p.short_title | default: p.title }}</span> — {{ p.summary }}</li>
+        {% endif %}{% endfor %}
       </ul>
     </section>
 
