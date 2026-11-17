@@ -1,0 +1,241 @@
+---
+title: RAID Write Back 캐시로 인한 /boot 손상 긴급 복구
+skill_group: 장애 대응
+skill_order: 20
+skill: RAID 캐시로 인한 /boot 손상 — ISO 복구 모드, xfs_repair, 부팅 파일 재구성
+link_label: /boot 손상 긴급 복구 상세
+---
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>RAID Write Back 캐시로 인한 /boot 손상 긴급 복구 — 황태운</title>
+  <meta name="description" content="Rocky Linux 9 서버가 재부팅 후 /boot XFS 손상으로 부팅되지 않은 장애를 ISO 복구 모드와 xfs_repair로 복구하고, RAID 컨트롤러 캐시 정책을 바로잡은 사례" />
+  <meta name="theme-color" content="#1a73e8" />
+  <link rel="stylesheet" href="../../assets/style.css" />
+  <style>
+    .table-wrap { overflow-x: auto; margin: 0.6rem 0 1rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+    th, td { border: 1px solid var(--border); padding: 0.5rem 0.7rem; text-align: left; vertical-align: top; }
+    th { background: var(--accent-soft); color: var(--accent); font-weight: 700; white-space: nowrap; }
+    .note { border-left: 4px solid var(--accent); background: var(--accent-soft); padding: 0.7rem 1rem; border-radius: 0 8px 8px 0; margin: 0.8rem 0; }
+    .screenshot { margin: 0.8rem 0 1.2rem; }
+    .screenshot img { display: block; max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 8px; }
+    .screenshot figcaption { margin-top: 0.4rem; color: var(--muted); font-size: 0.88rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <a href="../../index.html" class="back-link">← 메인으로</a>
+
+    <header>
+      <p class="tagline">장애 대응</p>
+      <h1>RAID Write Back 캐시로 인한 /boot 손상 긴급 복구</h1>
+      <p class="lead">정전도 없이 재부팅만 했는데 Rocky Linux 9 서버가 부팅되지 않았습니다. /boot 파일시스템 손상을 ISO 복구 모드로 살리고, 원인이 된 RAID 컨트롤러 캐시 정책까지 바로잡은 과정입니다.</p>
+    </header>
+
+    <section>
+      <h2>1. 장애 개요</h2>
+      <div class="table-wrap">
+        <table>
+          <tbody>
+            <tr><th>대상</th><td>Rocky Linux 9, 하드웨어 RAID 컨트롤러</td></tr>
+            <tr><th>발생 시점</th><td>OS 재부팅 (전원 차단 없음)</td></tr>
+            <tr><th>증상</th><td><code>/boot</code>(XFS) 마운트 실패 → 비상 모드(emergency mode)에서 멈춤</td></tr>
+            <tr><th>원인</th><td>BBU/CacheVault 보호 없이 Write Back으로 동작한 컨트롤러 캐시</td></tr>
+            <tr><th>조치</th><td>ISO 복구 모드 → <code>xfs_repair</code> → 부팅 파일 점검 → 캐시 정책 점검</td></tr>
+          </tbody>
+        </table>
+      </div>
+<pre><code>재부팅 → /boot 마운트 실패 → 비상 모드
+   │
+   ├─ 원격 콘솔(iDRAC·iLO·IPMI)로 Rocky 9 ISO 연결 → Rescue 모드
+   ├─ 손상 파티션 확인 (lsblk)
+   ├─ xfs_repair  (점검 → 로그 재생 시도 → -L 강제 복구)
+   ├─ 부팅 파일 점검, 없으면 커널·GRUB·initramfs 재구성
+   └─ 정상 부팅 확인 → 컨트롤러 캐시 정책 변경 → 재발 방지</code></pre>
+    </section>
+
+    <section>
+      <h2>2. 증상</h2>
+      <p>부팅 중 <code>/boot</code>를 마운트하다 XFS 메타데이터 CRC 오류가 나고, 저널(로그) 복구까지 실패해 비상 모드로 떨어졌습니다. 루트(<code>/</code>)는 정상이라 커널은 올라왔지만, <code>/boot</code>가 필요한 이후 단계로 넘어가지 못했습니다.</p>
+      <figure class="screenshot">
+        <img src="images/01-boot-emergency.png" alt="/boot XFS 메타데이터 오류로 마운트 실패 후 emergency mode 진입" loading="lazy" />
+        <figcaption>/boot(sda2) 메타데이터 CRC 오류 → 마운트 실패 → 비상 모드 (재현 화면)</figcaption>
+      </figure>
+      <p>비상 모드에서도 <code>xfs_repair</code>를 실행할 수는 있습니다. 하지만 손상 범위를 알 수 없고 커널·GRUB 파일까지 다시 만들어야 할 수도 있어서, 설치 ISO의 복구 환경에서 작업하기로 했습니다.</p>
+    </section>
+
+    <section>
+      <h2>3. 원인: 왜 재부팅만으로 깨졌나</h2>
+      <ul>
+        <li><strong>Write Back 캐시</strong>: 컨트롤러는 디스크에 쓰기 전에 캐시 메모리에 먼저 저장하고 OS에 "완료"를 알립니다. 실제 디스크 기록은 나중에 합니다.</li>
+        <li><strong>보호 장치 부재</strong>: 이 캐시는 원래 BBU(배터리)나 CacheVault(플래시)가 보호합니다. 보호 장치가 없거나 고장 난 상태에서 Write Back이 유지되면(특히 <strong>Always Write Back</strong> 설정) 캐시 데이터가 보호받지 못합니다.</li>
+        <li><strong>재부팅 시 캐시 유실</strong>: OS 재부팅 과정에서 PCIe 리셋 신호(PERST#)가 컨트롤러를 초기화하면서, 디스크에 아직 기록되지 않은 캐시 데이터가 사라졌습니다. 정전이 없어도 파일시스템이 손상될 수 있는 이유입니다.</li>
+        <li><strong>/boot가 깨지기 쉬운 이유</strong>: <code>/boot</code>는 커널 업데이트 때 쓰기가 몰리는 영역이라, 재부팅 직전 기록이 디스크에 반영되지 않으면 바로 부팅 실패로 이어집니다.</li>
+      </ul>
+      <div class="note">"재부팅은 안전하다"는 일반론과 달리, 보호 장치 없는 Write Back 캐시는 정상 재부팅에서도 데이터를 잃을 수 있습니다. 직접 겪은 장애로 확인한 내용입니다.</div>
+    </section>
+
+    <section>
+      <h2>4. 긴급 복구: ISO 복구 모드 진입</h2>
+      <ol>
+        <li>원격 관리 콘솔(iDRAC·iLO·IPMI)의 <strong>가상 미디어</strong>로 서버와 같은 메이저 버전의 Rocky Linux 9 ISO를 연결합니다.</li>
+        <li>부팅 순서를 가상 CD로 바꾸고 재부팅합니다.</li>
+        <li>부팅 메뉴에서 <strong>Troubleshooting → Rescue a Rocky Linux system</strong>을 선택합니다.</li>
+      </ol>
+      <figure class="screenshot">
+        <img src="images/02-iso-troubleshooting.png" alt="Rocky Linux 9 ISO 부팅 메뉴의 Troubleshooting → Rescue" loading="lazy" />
+        <figcaption>ISO 부팅 메뉴: Troubleshooting → Rescue a Rocky Linux system (재현 화면)</figcaption>
+      </figure>
+      <p>복구 환경이 뜨면 <strong>3) Skip to shell</strong>을 고릅니다. 1)번은 시스템을 <code>/mnt/sysroot</code>에 자동 마운트하는데, <code>/boot</code>가 손상된 상태에서는 마운트에 실패하거나 수리할 파일시스템이 마운트되어 버려 <code>xfs_repair</code>를 실행할 수 없습니다.</p>
+      <figure class="screenshot">
+        <img src="images/03-rescue-menu.png" alt="Rescue 메뉴에서 3) Skip to shell 선택" loading="lazy" />
+        <figcaption>Rescue 메뉴: 3) Skip to shell — 파일시스템을 마운트하지 않은 채 셸로 (재현 화면)</figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>5. 손상 파티션 확인</h2>
+<pre><code>vgchange -ay                                  # LVM 볼륨 활성화
+lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT
+blkid /dev/sda2                               # /etc/fstab 의 /boot UUID 와 같은지 확인</code></pre>
+      <figure class="screenshot">
+        <img src="images/04-lsblk.png" alt="lsblk 로 /boot 파티션 sda2 확인" loading="lazy" />
+        <figcaption>UEFI 구성: sda1 = /boot/efi, sda2 = /boot(XFS), sda3 = LVM(root·swap·home) (재현 화면)</figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>6. xfs_repair로 /boot 복구</h2>
+      <p>XFS는 쓰기 내용을 저널(로그)에 먼저 기록합니다. 그래서 <strong>가능하면 로그를 살려서 복구하고, 안 될 때만 로그를 버리는</strong> 순서로 진행합니다.</p>
+<pre><code># ① 점검만 (-n: 아무것도 바꾸지 않음)
+xfs_repair -n /dev/sda2
+
+# ② 로그 재생 시도: 마운트가 되면 로그가 반영됨 → 바로 해제 후 일반 복구
+mkdir -p /mnt/boot
+mount /dev/sda2 /mnt/boot &amp;&amp; umount /mnt/boot &amp;&amp; xfs_repair /dev/sda2
+
+# ③ 마운트조차 실패하면: 로그를 버리고 강제 복구 (로그에 있던 최근 변경은 유실 가능)
+xfs_repair -L /dev/sda2</code></pre>
+      <figure class="screenshot">
+        <img src="images/05-xfs-repair.png" alt="xfs_repair 점검 → 마운트 실패 → -L 강제 복구 완료" loading="lazy" />
+        <figcaption>로그 재생 불가(Structure needs cleaning) → <code>-L</code> 강제 복구 완료. 메타데이터가 로그보다 앞서 있다는 메시지가 캐시 유실 정황과 일치 (재현 화면)</figcaption>
+      </figure>
+      <div class="note"><code>-L</code>은 로그에 남아 있던 최근 변경을 버립니다. <code>/boot</code>는 커널·initramfs·GRUB 설정처럼 다시 만들 수 있는 파일만 있어서 감수할 수 있었지만, 데이터 파티션이라면 먼저 <code>dd</code>나 스냅샷으로 원본을 떠 두고 진행해야 합니다.</div>
+    </section>
+
+    <section>
+      <h2>7. 부팅 파일 점검</h2>
+      <p>복구 후 시스템을 마운트해 <code>/boot</code> 안의 파일이 온전한지 확인합니다. 손상된 파일은 <code>lost+found</code>로 옮겨지거나 크기가 0이 될 수 있습니다.</p>
+<pre><code># 시스템 마운트 후 chroot
+mkdir -p /mnt/sysroot
+mount /dev/rl/root /mnt/sysroot
+mount /dev/sda2    /mnt/sysroot/boot
+mount /dev/sda1    /mnt/sysroot/boot/efi
+for d in proc sys dev run; do mount --bind /$d /mnt/sysroot/$d; done
+chroot /mnt/sysroot
+
+# 설치된 커널과 /boot 파일이 짝이 맞는지
+rpm -q kernel-core
+ls -l /boot/vmlinuz-* /boot/initramfs-*
+ls /boot/loader/entries/          # 부팅 항목 (BLS)
+ls /boot/lost+found/ 2&gt;/dev/null # 복구 중 떨어져 나온 파일</code></pre>
+      <p>모든 커널 버전에 <code>vmlinuz</code>, <code>initramfs</code>, 부팅 항목이 크기 0 없이 있으면 8번은 건너뛰고 재부팅합니다.</p>
+    </section>
+
+    <section>
+      <h2>8. 파일이 깨졌을 때: 커널·initramfs·GRUB 재구성</h2>
+      <p>일부 파일이 없거나 손상되었다면, chroot 안에서 ISO를 저장소로 써서 오프라인으로 다시 만듭니다.</p>
+<pre><code># (chroot 밖, 복구 셸에서) ISO 를 chroot 안으로 연결
+mkdir -p /mnt/sysroot/mnt/iso
+mount --bind /run/install/repo /mnt/sysroot/mnt/iso
+chroot /mnt/sysroot
+
+# ISO 의 BaseOS 저장소만 사용해 커널 재설치
+#  → vmlinuz 복사, initramfs 생성, 부팅 항목(BLS) 등록까지 자동 수행
+dnf --disablerepo='*' --repofrompath=iso,/mnt/iso/BaseOS --setopt=iso.gpgcheck=0 \
+    install -y kernel-core kernel-modules
+
+# 네트워크가 되면 설치돼 있던 버전 그대로 재설치
+# dnf reinstall -y kernel-core-$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' kernel-core | tail -1)
+
+# 기존 커널의 initramfs 재생성
+dracut -f --regenerate-all
+
+# GRUB 설정 재생성 (RHEL 9 계열은 BIOS·UEFI 모두 이 경로)
+grub2-mkconfig -o /boot/grub2/grub.cfg
+
+# /etc/fstab 의 /boot UUID 확인 (mkfs 로 새로 만들었다면 반드시 수정)
+blkid /dev/sda2 ; grep /boot /etc/fstab
+
+exit</code></pre>
+      <p><code>xfs_repair</code>로도 살릴 수 없을 만큼 손상되었다면, <code>mkfs.xfs -f /dev/sda2</code>로 새로 만든 뒤 위 절차로 채웁니다. 이때 UUID가 바뀌므로 <code>/etc/fstab</code> 수정이 필수입니다.</p>
+    </section>
+
+    <section>
+      <h2>9. 정상화 확인</h2>
+<pre><code># 가상 미디어 분리 후 재부팅
+umount -R /mnt/sysroot
+reboot
+
+# 부팅 후
+findmnt /boot                      # /boot 정상 마운트
+journalctl -b -p err               # 이번 부팅 오류 확인
+xfs_info /boot                     # 파일시스템 정보
+grubby --default-kernel            # 기본 부팅 커널</code></pre>
+    </section>
+
+    <section>
+      <h2>10. 재발 방지: 컨트롤러 캐시 정책</h2>
+      <p>보호 장치가 없거나 고장 난 컨트롤러는 Write Through로 바꿉니다. 아래는 Broadcom(LSI) 계열 <code>storcli</code> 기준 예시입니다. Write Through는 디스크에 실제로 쓴 뒤에 완료를 알리므로 쓰기 성능은 떨어지지만, 캐시 유실로 데이터가 깨지지는 않습니다.</p>
+      <figure class="screenshot">
+        <img src="images/06-storcli-cache.png" alt="storcli 로 CacheVault 부재 확인 후 캐시 정책을 Write Through 로 변경" loading="lazy" />
+        <figcaption>CacheVault 없음 + Always Write Back(RAWBD) → Write Through(RWTD)로 변경 (재현 예시)</figcaption>
+      </figure>
+<pre><code># 캐시 보호 장치 상태
+storcli64 /c0/cv show          # CacheVault (플래시)
+storcli64 /c0/bbu show         # BBU (배터리)
+
+# 가상 디스크 캐시 정책
+storcli64 /c0/vall show
+
+# 보호 장치가 없거나 고장 → Write Through
+storcli64 /c0/v0 set wrcache=wt
+
+# 보호 장치가 정상일 때만 Write Back (고장 나면 자동으로 WT 전환)
+# storcli64 /c0/v0 set wrcache=wb      ← AWB(Always Write Back)는 쓰지 않음</code></pre>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>정책</th><th>동작</th><th>권장</th></tr></thead>
+          <tbody>
+            <tr><td>WT (Write Through)</td><td>디스크 기록 후 완료 응답</td><td>보호 장치가 없을 때</td></tr>
+            <tr><td>WB (Write Back)</td><td>캐시 저장 후 완료 응답, 보호 장치 고장 시 자동 WT 전환</td><td>BBU/CacheVault 정상일 때</td></tr>
+            <tr><td>AWB (Always Write Back)</td><td>보호 장치가 없어도 계속 Write Back</td><td>사용 금지</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Dell PERC는 <code>perccli</code>로 같은 명령을 쓰고, iDRAC 웹 화면의 가상 디스크 설정에서도 바꿀 수 있습니다.</p>
+    </section>
+
+    <section>
+      <h2>11. 재발 방지 운영 절차</h2>
+      <ul>
+        <li><strong>서버 점검 항목</strong>: 컨트롤러 캐시 정책과 BBU/CacheVault 상태를 정기 점검과 신규 서버 인수 점검에 포함합니다.</li>
+        <li><strong>/boot 백업</strong>: 커널 업데이트 직후 <code>/boot</code>를 압축 보관하면, 다음에는 재구성 없이 바로 복원할 수 있습니다.
+<pre><code>tar -czpf /backup/boot-$(hostname -s)-$(date +%F).tar.gz -C / boot</code></pre></li>
+        <li><strong>복구 ISO 준비</strong>: 서버와 같은 메이저 버전의 ISO를 원격 콘솔에서 바로 연결할 수 있는 위치에 둡니다.</li>
+        <li><strong>재부팅 전 확인</strong>: 계획된 재부팅 전에 <code>sync</code>를 실행하고, 캐시 정책이 WB/AWB인 서버는 보호 장치 상태부터 확인합니다.</li>
+      </ul>
+      <p>
+        <a href="../linux-troubleshooting/index.html" class="skill-link">→ Linux 장애 및 에러 처리 (파일시스템 Read Only 사례)</a>
+      </p>
+    </section>
+  </main>
+
+  <footer>
+    <p>황태운 · 시스템 인프라 운영 관리자</p>
+  </footer>
+</body>
+</html>
