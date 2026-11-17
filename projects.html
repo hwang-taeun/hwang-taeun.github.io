@@ -1,25 +1,8 @@
 ---
 # 프로젝트 목록 자동 생성
 #  - 상세 페이지가 있는 프로젝트: projects/<폴더>/index.html 머리말에 type: project 로 등록
-#  - 상세 페이지가 없는 프로젝트: 아래 extra_projects 에 등록
-extra_projects:
-  - title: SSL 리버스 프록시 구성
-    short_title: SSL 리버스 프록시
-    anchor: ssl-proxy
-    order: 50
-    featured: true
-    summary: 인증서 집중 관리 및 백엔드 HTTP 전환
-    problem: >-
-      웹 서버마다 인증서를 관리하며 만료 추적과 SSL 설정이 흩어졌습니다.
-    action: >-
-      Nginx/Apache에서 SSL을 종료하고 백엔드는 HTTP로 넘기는 프록시를 구성했습니다.
-      HTTP는 HTTPS로 리다이렉트했습니다.
-    result: >-
-      인증서 관리 지점을 프록시로 모으고 백엔드 웹 서버 설정을 단순화했습니다.
-    skill_group: 웹 & 네트워크 서비스
-    skill: 리버스 프록시(SSL 종료), 가상호스트, .htaccess 인증 대체
-    link_label: SSL 리버스 프록시 프로젝트
-    skill_order: 20
+#  - 상세 페이지가 없는 프로젝트: 아래 extra_projects 에 등록 (형식은 상세 페이지 머리말과 동일 + anchor)
+extra_projects: []
 ---
 <!DOCTYPE html>
 <html lang="ko">

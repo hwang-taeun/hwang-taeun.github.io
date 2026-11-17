@@ -1,0 +1,438 @@
+---
+title: SSL 리버스 프록시 구성 (SSL 종료 · 재암호화 · 로드밸런싱)
+short_title: SSL 리버스 프록시
+type: project
+anchor: ssl-proxy
+order: 50
+featured: true
+summary: 인증서를 프록시로 모으고, WEB 2대 로드밸런싱·헬스체크·프록시 이중화까지 구성
+problem: >-
+  웹 서버마다 인증서를 따로 관리하다 보니 만료 추적과 SSL 설정이 흩어졌고,
+  웹 서버가 외부에 직접 노출되어 한 대가 죽으면 서비스도 함께 멈췄습니다.
+action: >-
+  Nginx/Apache 프록시에서 SSL을 종료하고, 확장 단계에서는 프록시→WEB 구간을 내부 인증서로 다시 암호화했습니다.
+  mod_proxy_balancer로 WEB 2대를 묶어 헬스체크 기반 자동 제외·복귀를 구성하고, 프록시도 2대로 이중화했습니다.
+result: >-
+  인증서와 TLS 정책을 프록시 한 곳에서 관리하고, WEB 서버는 프록시 IP에서만 접근하도록 숨겼습니다.
+  WEB 한 대가 장애 나도 나머지 서버로 자동 전환되어 서비스가 이어집니다.
+skill_group: 웹 & 네트워크 서비스
+skill_order: 20
+skill: 리버스 프록시(SSL 종료·재암호화)·로드밸런싱, 가상호스트, .htaccess 인증
+link_label: SSL 리버스 프록시 프로젝트
+---
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SSL 리버스 프록시 구성 — 황태운</title>
+  <meta name="description" content="Nginx/Apache SSL 종료 프록시에서 시작해, 재암호화·mod_proxy_balancer 로드밸런싱·헬스체크·프록시 이중화까지 확장한 구성" />
+  <meta name="theme-color" content="#1a73e8" />
+  <link rel="stylesheet" href="../../assets/style.css" />
+  <style>
+    .table-wrap { overflow-x: auto; margin: 0.6rem 0 1rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+    th, td { border: 1px solid var(--border); padding: 0.5rem 0.7rem; text-align: left; vertical-align: top; }
+    th { background: var(--accent-soft); color: var(--accent); font-weight: 700; white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <main>
+    <a href="../../index.html" class="back-link">← 메인으로</a>
+
+    <header>
+      <p class="tagline">시스템 인프라 운영</p>
+      <h1>SSL 리버스 프록시 구성</h1>
+      <p class="lead">인증서를 프록시 한 곳으로 모으는 SSL 종료 구성에서 시작해, 내부 구간 재암호화, WEB 2대 로드밸런싱과 헬스체크, 프록시 이중화까지 단계적으로 확장했습니다.</p>
+    </header>
+
+    <section>
+      <h2>1. 구성 개요</h2>
+      <h3>기본: SSL 종료 (TLS Termination)</h3>
+<pre><code>[클라이언트] ──HTTPS──▶ [SSL 프록시] ──HTTP──▶ [웹 서버]
+                       인증서·TLS 정책은 여기서만 관리</code></pre>
+      <h3>확장: 재암호화 + 로드밸런싱 + 이중화</h3>
+<pre><code>                    ┌──────────────┐
+[클라이언트] ─HTTPS─▶│ PROXY1 / 2   │  (DNS 라운드로빈 · L4 · Keepalived VIP)
+                    └──────┬───────┘
+                           │ HTTPS (내부 인증서로 재암호화, 검증)
+                ┌──────────┴──────────┐
+         balancer://web_cluster   헬스체크 10초
+                ▼                      ▼
+             [WEB1]                 [WEB2]
+         프록시 IP만 허용        프록시 IP만 허용</code></pre>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>서버</th><th>IP</th><th>역할</th></tr></thead>
+          <tbody>
+            <tr><td>PROXY1</td><td><code>10.0.0.11</code></td><td>SSL 종료, 로드밸런서</td></tr>
+            <tr><td>PROXY2</td><td><code>10.0.0.12</code></td><td>PROXY1과 동일 (이중화)</td></tr>
+            <tr><td>WEB1</td><td><code>10.0.0.21</code> (<code>web1.example.com</code>)</td><td>Apache + PHP-FPM</td></tr>
+            <tr><td>WEB2</td><td><code>10.0.0.22</code> (<code>web2.example.com</code>)</td><td>Apache + PHP-FPM</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>모든 서버는 Rocky Linux 9입니다.</p>
+    </section>
+
+    <section>
+      <h2>2. 기본 구성: SSL 종료 프록시</h2>
+      <p>공인 인증서(Let's Encrypt)는 프록시에만 두고, 내부망의 웹 서버와는 HTTP로 통신합니다.
+        <a href="../../skills/letsencrypt/index.html" class="skill-link">→ 무료 인증서 발급 상세</a>
+      </p>
+
+      <h3>Nginx</h3>
+<pre><code># /etc/nginx/conf.d/www.example.com.conf
+server {
+    listen 443 ssl;
+    server_name www.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/www.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/www.example.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    location / {
+        proxy_pass http://10.0.0.21;                 # 내부망 웹 서버
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# HTTP → HTTPS
+server {
+    listen 80;
+    server_name www.example.com;
+    return 301 https://$host$request_uri;
+}</code></pre>
+
+      <h3>Apache</h3>
+<pre><code># 필요한 모듈: mod_ssl, mod_proxy, mod_proxy_http, mod_rewrite, mod_headers
+# /etc/httpd/conf.d/www.example.com.conf
+&lt;VirtualHost *:80&gt;
+    ServerName www.example.com
+    RewriteEngine On
+    RewriteRule ^/(.*)$ https://%{HTTP_HOST}/$1 [R=301,L]
+&lt;/VirtualHost&gt;
+
+&lt;VirtualHost *:443&gt;
+    ServerName www.example.com
+
+    SSLEngine on
+    SSLCertificateFile    /etc/letsencrypt/live/www.example.com/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/www.example.com/privkey.pem
+    SSLProtocol           all -SSLv3 -TLSv1 -TLSv1.1
+    SSLCipherSuite        HIGH:!aNULL:!MD5
+
+    ProxyPreserveHost On
+    ProxyPass        / http://10.0.0.21/
+    ProxyPassReverse / http://10.0.0.21/
+    RequestHeader set X-Forwarded-Proto "https"
+&lt;/VirtualHost&gt;</code></pre>
+      <p>HTTP 구간은 평문이므로 프록시와 웹 서버는 반드시 사설망으로 연결합니다. 내부 구간까지 암호화가 필요하면 아래 확장 구성처럼 재암호화합니다.</p>
+    </section>
+
+    <section>
+      <h2>3. 확장: 내부 인증서 (사설 CA)</h2>
+      <p>프록시→WEB 구간도 HTTPS로 다시 암호화하기 위해, 각 서버에서 사설 CA와 서버 인증서를 만들었습니다. 브라우저가 아닌 프록시만 검증하므로 공인 인증서가 필요 없습니다.</p>
+<pre><code>cd /data/web/ssl
+
+# 1) CA
+openssl genrsa -out ca.key 4096
+openssl req -x509 -new -nodes -key ca.key -sha256 -days 3650 \
+  -subj "/C=KR/O=Example/CN=Example-Web1-CA" -out ca.crt
+
+# 2) 서버 키 + CSR
+openssl genrsa -out web1.key 2048
+openssl req -new -key web1.key -subj "/C=KR/O=Example/CN=web1.example.com" -out web1.csr
+
+# 3) SAN 확장 (최신 클라이언트는 CN이 아닌 SAN으로 이름을 검증)
+cat &gt; web1.ext &lt;&lt; 'EOF'
+basicConstraints  = CA:FALSE
+keyUsage          = digitalSignature, keyEncipherment
+extendedKeyUsage  = serverAuth
+subjectAltName    = @alt_names
+[alt_names]
+DNS.1 = web1.example.com
+IP.1  = 10.0.0.21
+EOF
+
+# 4) CA로 서명 (825일: 사설 인증서 권장 최대 유효기간)
+openssl x509 -req -in web1.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -out web1.crt -days 825 -sha256 -extfile web1.ext
+cat web1.crt ca.crt &gt; web1-chain.crt
+
+chmod 600 ca.key web1.key
+openssl verify -CAfile ca.crt web1.crt
+openssl x509 -in web1.crt -noout -subject -dates -ext subjectAltName
+
+# SELinux: httpd가 읽을 수 있도록
+semanage fcontext -a -t httpd_config_t "/data/web/ssl(/.*)?"
+restorecon -Rv /data/web/ssl</code></pre>
+      <p>각 WEB의 <code>ca.crt</code>(공개 정보)만 프록시로 복사하고, 개인키는 서버 밖으로 옮기지 않습니다.</p>
+<pre><code># PROXY 에서: WEB CA 수집 → 하나의 번들로
+scp root@10.0.0.21:/data/web/ssl/ca.crt /data/proxy/ssl/web1-ca.crt
+scp root@10.0.0.22:/data/web/ssl/ca.crt /data/proxy/ssl/web2-ca.crt
+cat /data/proxy/ssl/web1-ca.crt /data/proxy/ssl/web2-ca.crt &gt; /data/proxy/ssl/web-ca-bundle.crt
+restorecon -Rv /data/proxy/ssl</code></pre>
+    </section>
+
+    <section>
+      <h2>4. 확장: 프록시 설정 (로드밸런서 + 헬스체크)</h2>
+<pre><code>dnf install -y httpd mod_ssl openssl
+rm -f /etc/httpd/conf.d/welcome.conf
+
+# 서버 정보 노출 차단 (/etc/httpd/conf/httpd.conf 하단)
+ServerTokens Prod
+ServerSignature Off
+TraceEnable Off</code></pre>
+
+<pre><code># /etc/httpd/conf.d/www.example.com.conf
+
+# Balancer Manager: 내부망에서만
+&lt;Location "/balancer-manager"&gt;
+    SetHandler balancer-manager
+    Require ip 127.0.0.1 10.0.0.0/24
+&lt;/Location&gt;
+
+&lt;VirtualHost *:80&gt;
+    ServerName www.example.com
+    RewriteEngine On
+    RewriteRule ^(.*)$ https://www.example.com$1 [R=301,L]
+&lt;/VirtualHost&gt;
+
+&lt;VirtualHost *:443&gt;
+    ServerName   www.example.com
+    DocumentRoot /data/proxy/wwwhome
+
+    # ── 클라이언트 ↔ PROXY ─────────────────────────
+    SSLEngine             On
+    SSLCertificateFile    /etc/letsencrypt/live/www.example.com/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/www.example.com/privkey.pem
+    SSLProtocol           all -SSLv3 -TLSv1 -TLSv1.1
+    SSLCipherSuite        HIGH:!aNULL:!MD5:!3DES
+    SSLHonorCipherOrder   On
+
+    # ── PROXY ↔ WEB (재암호화 + 인증서 검증) ───────
+    SSLProxyEngine            On
+    SSLProxyVerify            require
+    SSLProxyCACertificateFile /data/proxy/ssl/web-ca-bundle.crt
+    SSLProxyCheckPeerName     On
+    SSLProxyCheckPeerExpire   On
+
+    &lt;Directory "/data/proxy/wwwhome"&gt;
+        Options -Indexes -FollowSymLinks
+        AllowOverride None
+        Require all denied
+    &lt;/Directory&gt;
+
+    # ── 로드밸런서 ────────────────────────────────
+    # hcinterval=10 : 10초마다 /health.php 확인
+    # hcfails=3     : 3회 연속 실패 시 자동 제외
+    # hcpasses=2    : 2회 연속 성공 시 자동 복귀
+    &lt;Proxy "balancer://web_cluster"&gt;
+        BalancerMember "https://web1.example.com:443" route=web1 \
+            hcmethod=GET hcuri=/health.php hcinterval=10 hcpasses=2 hcfails=3
+        BalancerMember "https://web2.example.com:443" route=web2 \
+            hcmethod=GET hcuri=/health.php hcinterval=10 hcpasses=2 hcfails=3
+        ProxySet lbmethod=byrequests
+    &lt;/Proxy&gt;
+
+    ProxyRequests     Off
+    ProxyPreserveHost Off
+    ProxyPass        "/balancer-manager" "!"
+    ProxyPass        "/" "balancer://web_cluster/"
+    ProxyPassReverse "/" "balancer://web_cluster/"
+
+    # 상태 페이지는 내부망에서만 (서버 IP·PHP 버전 노출 방지)
+    &lt;Location "/health.php"&gt;
+        Require ip 127.0.0.1 10.0.0.0/24
+    &lt;/Location&gt;
+
+    # ── 클라이언트 IP 전달 ─────────────────────────
+    # 클라이언트가 보낸 X-Forwarded-For 는 버리고, mod_proxy 가 실제 IP로 다시 붙임
+    RequestHeader unset X-Forwarded-For early
+    RequestHeader set   X-Real-IP         expr=%{REMOTE_ADDR}
+    RequestHeader set   X-Forwarded-Proto "https"
+
+    # ── 로그: 클라이언트 IP + 실제 처리한 WEB ───────
+    LogFormat "%a \"%r\" %s %b backend=%{BALANCER_WORKER_NAME}e time=%T" proxy_log
+    ErrorLog  /var/log/httpd/www.example.com_error.log
+    CustomLog /var/log/httpd/www.example.com_access.log proxy_log
+
+    # ── 보안 헤더 ──────────────────────────────────
+    Header always set   Strict-Transport-Security "max-age=63072000; includeSubDomains"
+    Header always set   X-Content-Type-Options    "nosniff"
+    Header always set   X-Frame-Options           "SAMEORIGIN"
+    Header always unset Server
+&lt;/VirtualHost&gt;</code></pre>
+
+<pre><code># 기본 ssl.conf 의 예제 VirtualHost 제거 (전역 설정만 남김)
+cat &gt; /etc/httpd/conf.d/ssl.conf &lt;&lt; 'EOF'
+Listen 443 https
+SSLPassPhraseDialog exec:/usr/libexec/httpd-ssl-pass-dialog
+SSLSessionCache         shmcb:/run/httpd/sslcache(512000)
+SSLSessionCacheTimeout  300
+SSLCryptoDevice builtin
+EOF
+
+# SELinux: httpd 의 외부 연결·중계 허용
+setsebool -P httpd_can_network_connect on
+setsebool -P httpd_can_network_relay   on
+
+firewall-cmd --permanent --add-service={http,https}
+firewall-cmd --reload
+httpd -t &amp;&amp; systemctl enable --now httpd</code></pre>
+    </section>
+
+    <section>
+      <h2>5. 확장: WEB 서버 설정</h2>
+      <p>WEB 서버는 프록시 IP에서 오는 443 요청만 받고, 80은 모두 거부합니다. 방화벽과 Apache 양쪽에서 이중으로 제한합니다.</p>
+<pre><code># /etc/httpd/conf.d/web1.example.com.conf
+&lt;VirtualHost *:80&gt;
+    ServerName web1.example.com
+    RewriteEngine On
+    RewriteRule ^ - [F,L]                 # 평문 접근 전면 차단
+&lt;/VirtualHost&gt;
+
+&lt;VirtualHost *:443&gt;
+    ServerName   web1.example.com
+    DocumentRoot /data/web/wwwhome
+
+    SSLEngine             On
+    SSLCertificateFile    /data/web/ssl/web1-chain.crt
+    SSLCertificateKeyFile /data/web/ssl/web1.key
+    SSLProtocol           all -SSLv3 -TLSv1 -TLSv1.1
+
+    # mod_proxy_hcheck 의 HTTP/1.0 헬스체크 요청 허용
+    HttpProtocolOptions Unsafe
+
+    &lt;Directory "/data/web/wwwhome"&gt;
+        Options -Indexes -FollowSymLinks
+        AllowOverride All
+        Require ip 10.0.0.11 10.0.0.12 127.0.0.1    # PROXY1·2 만 허용
+    &lt;/Directory&gt;
+
+    &lt;FilesMatch \.php$&gt;
+        SetHandler "proxy:unix:/run/php-fpm/www.sock|fcgi://localhost"
+    &lt;/FilesMatch&gt;
+
+    # %{X-Real-IP}i = 실제 클라이언트, %a = 프록시
+    LogFormat "%{X-Real-IP}i %a \"%r\" %s %b time=%T" web_log
+    CustomLog /var/log/httpd/web1.example.com_access.log web_log
+    Header always unset Server
+&lt;/VirtualHost&gt;</code></pre>
+<pre><code># 방화벽: PROXY 에서 오는 443 만 허용
+for p in 10.0.0.11 10.0.0.12; do
+  firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=$p/32 port port=443 protocol=tcp accept"
+done
+firewall-cmd --reload</code></pre>
+
+      <h3>헬스체크 페이지 (health.php)</h3>
+      <p>단순히 200을 돌려주는 대신, 서버 부하가 높으면 500을 돌려줘 과부하 서버를 자동으로 트래픽에서 빼도록 했습니다. 브라우저로 열면 디스크·부하를 보여주는 상태 대시보드가 나오고, <code>?json=1</code>이면 JSON을 반환합니다.</p>
+<pre><code>&lt;?php
+$healthy = true;
+$status  = ['server' =&gt; gethostname(), 'time' =&gt; date('Y-m-d H:i:s')];
+
+// 디스크 여유 공간
+$free  = disk_free_space('/data/web/wwwhome');
+$total = disk_total_space('/data/web/wwwhome');
+$status['disk_free_pct'] = $total &gt; 0 ? round($free / $total * 100, 1) : 0;
+
+// 1분 load 가 코어 수의 2배를 넘으면 unhealthy → 프록시가 트래픽에서 제외
+$load = sys_getloadavg();
+$cpu  = (int)(shell_exec('nproc') ?: 1);
+if ($load[0] &gt; $cpu * 2) { $healthy = false; }
+
+$status['status'] = $healthy ? 'healthy' : 'unhealthy';
+http_response_code($healthy ? 200 : 500);
+
+if (isset($_GET['json'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($status, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+// ... 이하 HTML 상태 대시보드 (10초 자동 새로고침)</code></pre>
+    </section>
+
+    <section>
+      <h2>6. 동작 확인 및 장애 테스트</h2>
+<pre><code># 80 → 443 리다이렉트
+curl -sI http://www.example.com/ | grep -E "^HTTP|^Location"
+
+# 연속 요청 시 WEB1/WEB2 번갈아 응답하는지
+for i in 1 2 3 4; do curl -s https://www.example.com/health.php?json=1 | jq -r .server; done
+
+# 프록시 로그: backend= 값이 번갈아 기록되는지
+tail -f /var/log/httpd/www.example.com_access.log
+# 203.0.113.7 "GET / HTTP/1.1" 200 5120 backend=https://web1.example.com:443 time=0
+# 203.0.113.7 "GET / HTTP/1.1" 200 5120 backend=https://web2.example.com:443 time=0
+
+# 밸런서 상태 (내부망에서): 각 멤버 Status 가 Init Ok 인지
+curl -s https://www.example.com/balancer-manager</code></pre>
+
+      <h3>WEB2 장애 시 동작</h3>
+<pre><code>WEB2 httpd 중지 (systemctl stop httpd)
+   → 헬스체크 3회 연속 실패 (약 30초)
+   → balancer 에서 WEB2 자동 제외, 모든 요청 WEB1 로
+WEB2 복구 (systemctl start httpd)
+   → 헬스체크 2회 연속 성공 (약 20초)
+   → WEB2 자동 복귀, 라운드로빈 재개</code></pre>
+      <p>헬스체크가 실패를 확정하기 전 짧은 시간에 WEB2로 간 요청은 실패할 수 있습니다. 이 구간은 <code>hcinterval</code>과 <code>hcfails</code>를 줄여 단축합니다.</p>
+    </section>
+
+    <section>
+      <h2>7. 프록시 이중화</h2>
+      <p>프록시가 한 대면 프록시가 단일 장애점이 됩니다. PROXY2를 같은 설정으로 추가하고, 앞단에서 트래픽을 나눕니다.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>방식</th><th>동작</th><th>특징</th></tr></thead>
+          <tbody>
+            <tr><td>DNS 라운드로빈</td><td>같은 도메인에 PROXY1·2 IP 등록</td><td>간단하지만 장애 프록시를 DNS가 알지 못함</td></tr>
+            <tr><td>L4 스위치</td><td>VIP → 헬스체크 후 정상 프록시로</td><td>장비 필요, 가장 안정적</td></tr>
+            <tr><td>Keepalived VIP</td><td>MASTER 장애 시 VIP가 BACKUP으로 이동</td><td>장비 없이 자동 Failover</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>두 프록시는 같은 공인 인증서를 써야 클라이언트가 어느 쪽으로 붙어도 경고가 없습니다. 또 WEB 서버의 <code>Require ip</code>와 방화벽에 두 프록시 IP를 모두 등록해야 합니다.
+        <a href="../pacemaker-ha/index.html" class="skill-link">→ Pacemaker VIP 이중화 프로젝트</a>
+      </p>
+    </section>
+
+    <section>
+      <h2>8. 설계 포인트 및 보완 사항</h2>
+      <ul>
+        <li><strong>내부 구간 인증서 검증</strong>: 처음에는 <code>SSLProxyVerify none</code>으로 암호화만 하고 검증은 생략했습니다. 이러면 내부망에서 중간자가 끼어들어도 알 수 없습니다. 이미 수집한 WEB CA를 번들로 묶어 <code>SSLProxyVerify require</code>와 이름 검증을 켰습니다.</li>
+        <li><strong>상태 페이지 노출</strong>: <code>ProxyPass /</code> 때문에 <code>/health.php</code>가 외부에서도 열려 서버 IP와 PHP 버전이 보였습니다. 프록시에서 내부망만 허용했고, 헬스체크는 프록시 자신이 보내므로 영향이 없습니다.</li>
+        <li><strong>X-Forwarded-For 중복</strong>: <code>RequestHeader set X-Forwarded-For</code>로 넣으면 mod_proxy가 자동으로 붙이는 값과 겹칠 수 있습니다. 클라이언트가 보낸 값만 <code>unset ... early</code>로 지우고, 추가는 mod_proxy에 맡겼습니다.</li>
+        <li><strong>과부하 자동 제외의 위험</strong>: 두 WEB이 동시에 과부하면 둘 다 제외되어 전체 503이 됩니다. 기준값을 넉넉히 잡고, 부하 판단은 알림으로도 함께 받습니다.
+          <a href="../server-alert/index.html" class="skill-link">→ 서버 장애 SMS 알림 프로젝트</a>
+        </li>
+        <li><strong>세션 유지</strong>: 로그인 세션을 서버 메모리에 두는 애플리케이션이면 요청이 번갈아 가면서 로그아웃될 수 있습니다. <code>stickysession</code>을 쓰거나 세션을 DB·Redis로 공유합니다.</li>
+        <li><strong>사설 CA 관리</strong>: 실습에서는 서버마다 CA를 만들었습니다. 서버가 늘어나면 내부 CA 하나로 모든 WEB 인증서를 서명하는 편이 갱신·배포가 단순합니다.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>9. 인증서 갱신</h2>
+<pre><code># WEB (825일 주기): 같은 키로 CSR 재발급 → CA 서명 → 체인 재생성
+cd /data/web/ssl
+openssl req -new -key web1.key -subj "/C=KR/O=Example/CN=web1.example.com" -out web1.csr
+openssl x509 -req -in web1.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -out web1.crt -days 825 -sha256 -extfile web1.ext
+cat web1.crt ca.crt &gt; web1-chain.crt
+systemctl reload httpd
+
+# 만료일 확인
+openssl x509 -in web1.crt -noout -enddate</code></pre>
+      <p>공인 인증서(Let's Encrypt)는 프록시에서만 자동 갱신하면 되므로, 서버가 늘어나도 갱신 작업 지점은 늘지 않습니다.</p>
+    </section>
+  </main>
+
+  <footer>
+    <p>황태운 · 시스템 인프라 운영 관리자</p>
+  </footer>
+</body>
+</html>
