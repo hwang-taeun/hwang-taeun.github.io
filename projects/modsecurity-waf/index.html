@@ -118,29 +118,31 @@
     <p>황태운 · 시스템 인프라 운영 관리자</p>
   </footer>
 
-  <script>
-    async function loadCode(id, path) {
-      const el = document.getElementById(id);
-      if (!el) return;
-      try {
-        const res = await fetch(path);
-        if (!res.ok) throw new Error(res.status);
-        const text = await res.text();
-        el.textContent = text;
-      } catch (e) {
-        el.textContent = '파일을 불러올 수 없습니다: ' + path;
-      }
-    }
-
-    document.addEventListener('DOMContentLoaded', () => {
-      loadCode('code-block', 'code/block.php');
-      loadCode('code-env', 'code/inc/env.php');
-      loadCode('code-lang', 'code/inc/lang.php');
-      loadCode('code-handler', 'code/inc/request_handler.php');
-      loadCode('code-blockinfo', 'code/parts/block_info.php');
-      loadCode('code-tech', 'code/parts/tech_info.php');
-      loadCode('code-form', 'code/parts/request_form.php');
-    });
-  </script>
+ <script>
+ async function loadCode(id, path) {
+   const el = document.getElementById(id);
+   if (!el) return;
+ 
+   try {
+     const res = await fetch(path);
+     if (!res.ok) throw new Error(res.status);
+     const text = await res.text();
+     el.textContent = text;
+   } catch (e) {
+     // fetch 실패 시 (file:// 환경 등) 링크 표시
+     el.innerHTML = `<a href="${path}" target="_blank" style="color:var(--accent);">📄 ${path} 파일 보기 / 다운로드</a>`;
+   }
+ }
+ 
+ document.addEventListener('DOMContentLoaded', () => {
+   loadCode('code-block', 'code/block.php');
+   loadCode('code-env', 'code/inc/env.php');
+   loadCode('code-lang', 'code/inc/lang.php');
+   loadCode('code-handler', 'code/inc/request_handler.php');
+   loadCode('code-blockinfo', 'code/parts/block_info.php');
+   loadCode('code-tech', 'code/parts/tech_info.php');
+   loadCode('code-form', 'code/parts/request_form.php');
+ });
+ </script>
 </body>
 </html>

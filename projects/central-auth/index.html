@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SSSD + LDAP/AD + RADIUS 중앙 인증 — 황태운</title>
+  <meta name="description" content="SSSD로 LDAP/AD 계정 정보와 RADIUS 비밀번호 검증을 통합하는 Linux 중앙 인증 구축" />
+  <meta name="theme-color" content="#1a73e8" />
+  <link rel="stylesheet" href="../../assets/style.css" />
+  <style>
+    .table-wrap { overflow-x: auto; margin: 0.6rem 0 1rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+    th, td { border: 1px solid var(--border); padding: 0.55rem 0.7rem; text-align: left; vertical-align: top; }
+    th { background: var(--accent-soft); color: var(--accent); font-weight: 700; white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <main>
+    <a href="../../index.html" class="back-link">← 메인으로</a>
+
+    <header>
+      <p class="tagline">시스템 인프라 운영</p>
+      <h1>SSSD + LDAP/AD + RADIUS 중앙 인증</h1>
+      <p class="lead">계정 정보(ID)와 비밀번호 검증(인증)을 분리해, 대규모 서버 환경(1000대 이상)에서 SSH 로그인을 중앙 계정으로 통합하는 구성입니다.</p>
+    </header>
+
+    <section>
+      <h2>1. 아키텍처 개요</h2>
+      <p>서버마다 로컬 계정을 만들면 UID/GID와 비밀번호 정책이 서버마다 달라집니다. 계정 속성은 LDAP/AD에서, 비밀번호 검증은 RADIUS에서 맡고, 각 서버는 SSSD로 두 결과를 합쳐 사용합니다.</p>
+<pre><code>사용자 ── SSH ──▶ WEB/DB 서버
+                   sshd → PAM → SSSD
+                                 ├─ 계정 조회 (id_provider)   ──▶ LDAP / AD
+                                 └─ 비밀번호 검증 (auth)      ──▶ RADIUS ──▶ LDAP / AD</code></pre>
+
+      <h3>구성 요소 역할</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>구성 요소</th><th>위치</th><th>주요 기능</th><th>관리 정보</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>LDAP / AD</strong></td>
+              <td>중앙 서버</td>
+              <td>사용자 계정의 속성 정보를 제공하는 ID 공급자(ID Provider)</td>
+              <td>UID, GID, 홈 디렉터리, 셸, 그룹</td>
+            </tr>
+            <tr>
+              <td><strong>RADIUS</strong></td>
+              <td>중앙 서버</td>
+              <td>입력한 비밀번호의 유효성을 검증하는 인증 서버</td>
+              <td>비밀번호, MFA(Multi-Factor Authentication)</td>
+            </tr>
+            <tr>
+              <td><strong>SSSD</strong></td>
+              <td>WEB/DB 서버</td>
+              <td>중앙 서버의 ID·인증 정보를 통합하고 로컬에 캐싱하는 중개자</td>
+              <td>캐싱된 계정 속성과 인증 정보</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>2. 중앙 서버 설정</h2>
+
+      <h3>2.1 LDAP / AD (계정 속성)</h3>
+      <ul>
+        <li>LDAP 또는 AD 서버를 구축하고 서비스를 시작합니다.</li>
+        <li>모든 사용자의 <code>uidNumber</code>, <code>gidNumber</code>, <code>homeDirectory</code>, <code>loginShell</code> 속성을 등록합니다. 서버마다 같은 UID/GID가 나오도록 여기서만 관리합니다.</li>
+      </ul>
+
+      <h3>2.2 RADIUS (FreeRADIUS, 비밀번호 검증)</h3>
+      <p>로그인 시 입력한 비밀번호가 맞는지 LDAP/AD에 질의해 검증합니다.</p>
+<pre><code># 패키지 설치
+dnf install -y freeradius freeradius-utils freeradius-ldap</code></pre>
+
+      <p><strong>클라이언트 등록</strong>: 인증을 요청할 WEB/DB 서버와 공유 비밀키를 등록합니다.</p>
+<pre><code># /etc/raddb/clients.conf
+client web-servers {
+    ipaddr = 192.0.2.0/24
+    secret = [공유 비밀키]
+}</code></pre>
+
+      <p><strong>LDAP 연동</strong>: ldap 모듈을 켜고 LDAP/AD 서버 정보를 넣습니다. AD는 비밀번호 해시를 내주지 않으므로 사용자 계정으로 LDAP bind를 시도하는 방식(<code>Auth-Type LDAP</code>)으로 검증합니다.</p>
+<pre><code>ln -s ../mods-available/ldap /etc/raddb/mods-enabled/ldap
+
+# /etc/raddb/mods-enabled/ldap (주요 항목)
+ldap {
+    server   = 'ldap.example.com'
+    identity = 'cn=radius,ou=service,dc=example,dc=com'
+    password = '[서비스 계정 비밀번호]'
+    base_dn  = 'dc=example,dc=com'
+}</code></pre>
+
+      <p><strong>방화벽 및 서비스 시작</strong></p>
+<pre><code>firewall-cmd --permanent --add-service=radius
+firewall-cmd --reload
+
+systemctl enable --now radiusd
+
+# 서버에서 직접 인증 테스트
+radtest taeun '[비밀번호]' 127.0.0.1 0 testing123</code></pre>
+    </section>
+
+    <section>
+      <h2>3. WEB/DB 서버 설정 (클라이언트)</h2>
+
+      <h3>3.1 패키지 설치</h3>
+      <p><code>pam_radius</code>는 EPEL 저장소에 있습니다.</p>
+<pre><code>dnf install -y epel-release
+dnf install -y sssd sssd-tools pam_radius oddjob-mkhomedir</code></pre>
+
+      <h3>3.2 SSSD 설정</h3>
+      <p>계정 조회는 LDAP으로, 비밀번호 검증은 <code>proxy</code>를 거쳐 RADIUS로 보냅니다. SSSD에는 RADIUS 전용 인증 공급자가 없어서, PAM 모듈(<code>pam_radius_auth</code>)을 proxy로 연결합니다.</p>
+<pre><code># /etc/sssd/sssd.conf
+[sssd]
+domains = central
+services = nss, pam
+
+[domain/central]
+# --- 계정 속성: LDAP/AD ---
+id_provider = ldap
+ldap_uri = ldaps://ldap.example.com
+ldap_search_base = dc=example,dc=com
+ldap_schema = rfc2307bis          # AD는 ad
+
+# --- 비밀번호 검증: proxy → RADIUS ---
+auth_provider = proxy
+proxy_pam_target = sssd-radius
+
+access_provider = permit
+cache_credentials = true          # 중앙 서버 장애 시 캐시로 로그인 유지</code></pre>
+<pre><code>chmod 600 /etc/sssd/sssd.conf      # 권한이 600이 아니면 SSSD가 시작되지 않음</code></pre>
+
+      <h3>3.3 RADIUS 연결 설정</h3>
+<pre><code># /etc/pam.d/sssd-radius  (proxy_pam_target 이 가리키는 PAM 스택)
+auth     required   pam_radius_auth.so
+account  required   pam_permit.so</code></pre>
+<pre><code># /etc/raddb/server  (pam_radius 가 사용할 RADIUS 서버)
+# 서버[:포트]          공유 비밀키        타임아웃(초)
+192.0.2.10:1812       [공유 비밀키]      3</code></pre>
+<pre><code>chmod 600 /etc/raddb/server</code></pre>
+
+      <h3>3.4 PAM 연동 및 서비스 시작</h3>
+      <p><code>/etc/pam.d/sshd</code>를 직접 고치지 않고 <code>authselect</code>로 SSSD 프로필을 적용합니다. 첫 로그인 시 홈 디렉터리도 자동으로 만들어집니다.</p>
+<pre><code>authselect select sssd with-mkhomedir --force
+systemctl enable --now oddjobd
+systemctl enable --now sssd</code></pre>
+    </section>
+
+    <section>
+      <h2>4. 동작 확인</h2>
+<pre><code># 계정 조회 (LDAP/AD)
+getent passwd taeun
+id taeun
+
+# SSSD 도메인 상태
+sssctl domain-status central
+
+# 최종 테스트: 중앙 계정으로 SSH 로그인 (비밀번호 → RADIUS 검증)
+ssh taeun@web01</code></pre>
+      <p>로그인이 실패하면 <code>/var/log/sssd/</code>와 <code>/var/log/secure</code>, RADIUS 서버의 <code>radiusd -X</code>(디버그 모드)로 어느 단계에서 막히는지 확인합니다.</p>
+    </section>
+
+    <section>
+      <h2>5. 설계 포인트</h2>
+      <ul>
+        <li><strong>역할 분리</strong>: 계정 속성(LDAP/AD)과 비밀번호 검증(RADIUS)을 나눠, RADIUS 쪽에 MFA를 붙여도 서버 설정은 바뀌지 않습니다.</li>
+        <li><strong>SSSD proxy 사용</strong>: SSSD는 RADIUS를 직접 지원하지 않으므로 <code>auth_provider = proxy</code>로 <code>pam_radius_auth</code>를 연결했습니다.</li>
+        <li><strong>장애 대비</strong>: <code>cache_credentials</code>로 중앙 서버가 잠시 내려가도 한 번 로그인했던 계정은 캐시로 로그인할 수 있습니다.</li>
+        <li><strong>비밀값 관리</strong>: 공유 비밀키와 서비스 계정 비밀번호가 들어간 파일은 모두 600 권한으로 제한합니다.</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer>
+    <p>황태운 · 시스템 인프라 운영 관리자</p>
+  </footer>
+</body>
+</html>

@@ -88,6 +88,14 @@ code {
   border-radius: 4px;
 }
 
+/* 코드 블록 안의 code는 인라인 코드 스타일(여백·배경)을 받지 않도록 초기화.
+   이게 없으면 첫 줄에만 좌우 padding이 적용되어 한 칸 들여써져 보임 */
+pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}
+
 .img-wrap {
   margin: 1rem 0;
   text-align: center;

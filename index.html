@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>황태운 – 시스템 인프라 운영 관리자</title>
-  <meta name="description" content="황태운 – Linux·Windows 시스템 인프라 운영 관리자. 보안 점검·하드닝과 장애 대응 자동화를 중심으로 한 포트폴리오" />
+  <title>황태운 — 시스템 인프라 운영 관리자</title>
+  <meta name="description" content="황태운의 Linux·Windows 시스템 인프라 운영 관리자. 보안 점검·하드닝과 장애 대응 자동화를 중심으로 한 포트폴리오" />
   <meta name="theme-color" content="#1a73e8" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -131,7 +131,7 @@
     <header>
       <p class="tagline">시스템 인프라 운영 관리자</p>
       <h1>황태운</h1>
-      <p class="lead">Linux·Windows 운영과 보안 점검·자동화에 강점을 둔 시스템 인프라 운영 관리자입니다.</p>
+      <p class="lead">Linux·Windows 운영과 보안 점검·자동화에 강점이 있는 시스템 인프라 운영 관리자입니다.</p>
       <p>장애 인지, 접근 차단, 인증서·계정 관리처럼 반복되는 운영 작업을 스크립트와 정책으로 줄여 왔습니다. Apache, Nginx, rsyslog, PowerShell, Bash로 실제 환경에 적용한 구축·장애 대응을 정리합니다.</p>
     </header>
 
@@ -141,30 +141,35 @@
         <a href="skill.html" class="btn-link">전체 스킬 상세보기 →</a>
       </div>
       <ul>
-        <li><span class="highlight">OS & 시스템</span> — Linux (Rocky/Ubuntu/RHEL), Windows Server, AD/GPO, KVM/OpenStack</li>
-        <li><span class="highlight">웹·네트워크</span> — Apache, Nginx, PHP, SSL/Let’s Encrypt, Cloudflare API</li>
-        <li><span class="highlight">보안·하드닝</span> — PAM, 로그 권한, RDP 타임아웃, ModSecurity</li>
-        <li><span class="highlight">모니터링·자동화</span> — rsyslog, logrotate, Bash/PowerShell, systemd/crontab</li>
+        <li><span class="highlight">OS &amp; 시스템</span> — Linux (Rocky/Ubuntu/RHEL), Windows Server, AD/GPO, SSSD/LDAP, KVM/OpenStack</li>
+        <li><span class="highlight">웹·네트워크</span> — Apache, Nginx, PHP, SSL/Let’s Encrypt, DNS, Cloudflare API</li>
+        <li><span class="highlight">보안·하드닝</span> — PAM, 로그 권한, RDP 타임아웃, ModSecurity, SPF/DKIM/DMARC</li>
+        <li><span class="highlight">모니터링·자동화</span> — Elasticsearch/Kibana, rsyslog, logrotate, Bash/PowerShell, systemd/crontab</li>
+        <li><span class="highlight">장애 대응</span> — 파일시스템 복구, 권한 복구, virsh 기반 VM 제어</li>
       </ul>
     </section>
 
     <section>
-  <div class="section-header">
-    <h2>대표 프로젝트</h2>
+      <div class="section-header">
+        <h2>대표 프로젝트</h2>
         <a href="projects.html" class="btn-link">전체 프로젝트 보기 →</a>
       </div>
       <ul>
-        <li><span class="highlight">AbuseIPDB Apache 차단</span> — API로 블랙리스트 수집 후 2.2/2.4 규칙 자동 생성</li>
-        <li><span class="highlight">서버 장애 감지 알림</span> — 리소스·프로세스·포트 점검 후 Slack/SMS 알림</li>
+        <li><span class="highlight">AbuseIPDB Apache 차단</span> — API로 블랙리스트 수집 → 2.2/2.4 규칙 자동 생성</li>
+        <li><span class="highlight">서버 장애 감지 알림</span> — 리소스·프로세스·포트 점검 → Slack/SMS 알림</li>
         <li><span class="highlight">ModSecurity WAF 페이지</span> — 차단 사유 표시 + 해제 요청 폼 구축</li>
         <li><span class="highlight">SSL 리버스 프록시</span> — 인증서 집중 관리 및 백엔드 HTTP 전환</li>
+        <li><span class="highlight">Elasticsearch 모니터링</span> — Metricbeat로 Linux·Windows 메트릭 통합 대시보드</li>
+        <li><span class="highlight">중앙 인증</span> — SSSD + LDAP/AD + RADIUS로 SSH 로그인 계정 통합</li>
       </ul>
     </section>
 
+    <!-- 이력서 PDF 준비되면 assets/resume.pdf 를 넣고 주석 해제
     <section>
       <h2>이력서</h2>
-      <p><a href="./assets/resume.pdf" target="_blank" rel="noopener">이력서 PDF 다운로드</a> (작성 중)</p>
+      <p><a href="./assets/resume.pdf" target="_blank" rel="noopener">이력서 PDF 다운로드</a></p>
     </section>
+    -->
 
     <section>
       <h2>연락처</h2>

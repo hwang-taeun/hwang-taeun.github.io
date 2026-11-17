@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>황태운 – 시스템 인프라 운영 관리자</title>
+  <meta name="description" content="황태운 – Linux·Windows 시스템 인프라 운영 관리자. 보안 점검·하드닝과 장애 대응 자동화를 중심으로 한 포트폴리오" />
+  <meta name="theme-color" content="#1a73e8" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #f6f8fb;
+      --card: #ffffff;
+      --text: #1f2933;
+      --muted: #52606d;
+      --accent: #1a73e8;
+      --accent-soft: #e8f0fe;
+      --border: #e4e7eb;
+      --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 8px 24px rgba(16, 24, 40, 0.06);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #121417;
+        --card: #1c1f24;
+        --text: #e8eaed;
+        --muted: #9aa0a6;
+        --accent: #8ab4f8;
+        --accent-soft: #1e3a5f;
+        --border: #2d3138;
+        --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.28);
+      }
+    }
+    * { box-sizing: border-box; }
+    html { color-scheme: light dark; }
+    body {
+      font-family: "Noto Sans KR", "Malgun Gothic", "Apple SD Gothic Neo", "Segoe UI", sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      margin: 0;
+      padding: clamp(24px, 5vw, 56px) clamp(16px, 4vw, 32px);
+    }
+    main { max-width: 860px; margin: 0 auto; }
+    header { margin-bottom: 2.2rem; }
+    h1, h2, h3 { color: var(--accent); line-height: 1.35; margin: 0 0 0.6rem; }
+    h1 { font-size: clamp(1.6rem, 3vw, 2.1rem); color: var(--text); }
+    h2 {
+      font-size: 1.25rem;
+      padding-bottom: 0.4rem;
+      border-bottom: 2px solid var(--accent-soft);
+      margin-bottom: 1rem;
+    }
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.6rem;
+    }
+    .section-header h2 { margin: 0; border: none; padding: 0; }
+    .lead { color: var(--muted); font-size: 1.05rem; }
+    .tagline {
+      display: inline-block;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 500;
+      font-size: 0.92rem;
+      padding: 0.25rem 0.7rem;
+      border-radius: 999px;
+      margin-bottom: 0.9rem;
+    }
+    section {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      padding: clamp(18px, 3vw, 28px);
+      margin-bottom: 1.4rem;
+    }
+    ul { padding-left: 1.2rem; margin: 0.35rem 0 0.8rem; }
+    li { margin: 0.28rem 0; }
+    .highlight {
+      background-color: var(--accent-soft);
+      color: var(--accent);
+      padding: 0.05rem 0.4rem;
+      border-radius: 4px;
+      font-weight: 500;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .btn-link {
+      font-size: 0.9rem;
+      font-weight: 700;
+      padding: 6px 14px;
+      background-color: var(--accent);
+      color: #fff !important;
+      border-radius: 6px;
+      transition: background-color 0.2s;
+    }
+    .btn-link:hover { background-color: #155cb4; text-decoration: none !important; }
+    .project { border-top: 1px solid var(--border); padding-top: 0.8rem; margin-top: 0.8rem; }
+    .project:first-of-type { border-top: none; padding-top: 0; margin-top: 0; }
+    dl.facts { margin: 0; }
+    dl.facts div {
+      display: grid;
+      grid-template-columns: 3.2rem 1fr;
+      gap: 0.6rem 0.9rem;
+      margin: 0.45rem 0;
+    }
+    dl.facts dt { font-weight: 700; color: var(--accent); font-size: 0.92rem; }
+    dl.facts dd { margin: 0; }
+    .contact-list { list-style: none; padding: 0; margin: 0; }
+    .contact-list li { display: flex; gap: 0.7rem; flex-wrap: wrap; }
+    .contact-list span { color: var(--muted); min-width: 4.5rem; }
+    footer {
+      max-width: 860px;
+      margin: 0.5rem auto 0;
+      color: var(--muted);
+      font-size: 0.9rem;
+      text-align: center;
+    }
+    @media (max-width: 560px) {
+      dl.facts div { grid-template-columns: 1fr; gap: 0.15rem; }
+      .section-header { flex-direction: column; align-items: flex-start; gap: 0.6rem; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="tagline">시스템 인프라 운영 관리자</p>
+      <h1>황태운</h1>
+      <p class="lead">Linux·Windows 운영과 보안 점검·자동화에 강점을 둔 시스템 인프라 운영 관리자입니다.</p>
+      <p>장애 인지, 접근 차단, 인증서·계정 관리처럼 반복되는 운영 작업을 스크립트와 정책으로 줄여 왔습니다. Apache, Nginx, rsyslog, PowerShell, Bash로 실제 환경에 적용한 구축·장애 대응을 정리합니다.</p>
+    </header>
+
+    <section>
+      <div class="section-header">
+        <h2>운영 분야 스킬셋</h2>
+        <a href="skill.html" class="btn-link">전체 스킬 상세보기 →</a>
+      </div>
+      <ul>
+        <li><span class="highlight">OS & 시스템</span> — Linux (Rocky/Ubuntu/RHEL), Windows Server, AD/GPO, KVM/OpenStack</li>
+        <li><span class="highlight">웹·네트워크</span> — Apache, Nginx, PHP, SSL/Let’s Encrypt, Cloudflare API</li>
+        <li><span class="highlight">보안·하드닝</span> — PAM, 로그 권한, RDP 타임아웃, ModSecurity</li>
+        <li><span class="highlight">모니터링·자동화</span> — rsyslog, logrotate, Bash/PowerShell, systemd/crontab</li>
+      </ul>
+    </section>
+
+    <section>
+  <div class="section-header">
+    <h2>대표 프로젝트</h2>
+        <a href="projects.html" class="btn-link">전체 프로젝트 보기 →</a>
+      </div>
+      <ul>
+        <li><span class="highlight">AbuseIPDB Apache 차단</span> — API로 블랙리스트 수집 후 2.2/2.4 규칙 자동 생성</li>
+        <li><span class="highlight">서버 장애 감지 알림</span> — 리소스·프로세스·포트 점검 후 Slack/SMS 알림</li>
+        <li><span class="highlight">ModSecurity WAF 페이지</span> — 차단 사유 표시 + 해제 요청 폼 구축</li>
+        <li><span class="highlight">SSL 리버스 프록시</span> — 인증서 집중 관리 및 백엔드 HTTP 전환</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>이력서</h2>
+      <p><a href="./assets/resume.pdf" target="_blank" rel="noopener">이력서 PDF 다운로드</a> (작성 중)</p>
+    </section>
+
+    <section>
+      <h2>연락처</h2>
+      <ul class="contact-list">
+        <li>
+          <span>GitHub</span>
+          <a href="https://github.com/Taeun-Hwang" target="_blank" rel="noopener">github.com/Taeun-Hwang</a>
+        </li>
+        <li>
+          <span>포트폴리오</span>
+          <a href="https://github.com/Taeun-Hwang/taeun-hwang.github.io" target="_blank" rel="noopener">taeun-hwang.github.io 저장소</a>
+        </li>
+      </ul>
+    </section>
+  </main>
+
+  <footer>
+    <p>황태운 · 시스템 인프라 운영 관리자</p>
+  </footer>
+</body>
+</html>

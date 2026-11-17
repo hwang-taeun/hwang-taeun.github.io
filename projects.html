@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>대표 프로젝트 – 황태운</title>
-  <meta name="description" content="황태운 – 시스템 인프라 운영 관리자 대표 프로젝트" />
+  <title>대표 프로젝트 — 황태운</title>
+  <meta name="description" content="황태운 — 시스템 인프라 운영 관리자 대표 프로젝트" />
   <meta name="theme-color" content="#1a73e8" />
   <link rel="stylesheet" href="assets/style.css" />
   <style>
@@ -22,7 +22,7 @@
       padding-top: 0.1rem;
     }
     .fact p { margin: 0; }
-    .project { margin-bottom: 1.8rem; }
+    .project { margin-bottom: 1.8rem; scroll-margin-top: 1rem; }
     .project:last-child { margin-bottom: 0; }
     .project h3 { margin-bottom: 0.8rem; }
     .detail-link { margin-top: 0.6rem; font-weight: 500; }
@@ -34,33 +34,33 @@
 
     <header>
       <p class="tagline">시스템 인프라 운영 관리자</p>
-      <h1>황태운 – 대표 프로젝트</h1>
+      <h1>황태운의 대표 프로젝트</h1>
       <p class="lead">실제 운영 환경에서 문제 해결을 위해 구축·적용한 프로젝트입니다.</p>
     </header>
 
     <section>
       <h2>대표 프로젝트</h2>
 
-      <article class="project">
+      <article class="project" id="abuseipdb">
         <h3>AbuseIPDB 기반 Apache 자동 차단</h3>
         <div class="facts">
           <div class="fact">
             <span class="fact-label">문제</span>
-            <p>악성 IP의 반복 접근을 수동으로 deny 목록에 넣고 재기동해야 했습니다.</p>
+            <p>악성 IP의 반복 접근을 수동으로 deny 목록에 넣고 유지보수해야 했습니다.</p>
           </div>
           <div class="fact">
             <span class="fact-label">조치</span>
-            <p>AbuseIPDB API로 블랙리스트를 받아 Apache 2.2(<code>Deny</code>) / 2.4(<code>Require</code>) 규칙 파일을 만들고 crontab으로 갱신했습니다.</p>
+            <p>AbuseIPDB API로 블랙리스트를 받아 Apache 2.2(<code>Deny</code>) / 2.4(<code>Require</code>) 규칙 파일을 만들고 crontab으로 갱신했습니다. 신규 IP는 <code>check</code> API 실시간 조회로 보완했습니다.</p>
           </div>
           <div class="fact">
             <span class="fact-label">결과</span>
             <p>2.2·2.4가 섞인 환경에서도 같은 주기로 차단 목록을 유지할 수 있게 되었습니다.</p>
           </div>
         </div>
-        <p class="detail-link"><a href="projects/apache-ipblock/index.html">→ 상세 보기</a></p>
+        <p class="detail-link"><a href="projects/abuseipdb/index.html">→ 상세 보기</a></p>
       </article>
 
-      <article class="project">
+      <article class="project" id="server-alert">
         <h3>Linux 서버 장애 감지 및 알림</h3>
         <div class="facts">
           <div class="fact">
@@ -69,16 +69,16 @@
           </div>
           <div class="fact">
             <span class="fact-label">조치</span>
-            <p><code>top</code>, <code>ps</code>, <code>df</code>, <code>uptime</code>과 프로세스·포트·저널 로그를 점검하는 스크립트를 만들고 Slack·SMS로 보냈습니다.</p>
+            <p><code>top</code>, <code>ps</code>, <code>df</code>, <code>uptime</code>과 프로세스·포트·서비스 로그를 점검하는 스크립트를 만들고 Slack·SMS로 보냈습니다.</p>
           </div>
           <div class="fact">
             <span class="fact-label">결과</span>
-            <p>야간·무인 시간대에도 이상 징후를 바로 받아 장애 인지 지연을 줄였습니다.</p>
+            <p>야간·무인 시간에도 이상 징후를 바로 받아 장애 인지 지연을 줄였습니다.</p>
           </div>
         </div>
       </article>
 
-      <article class="project">
+      <article class="project" id="modsecurity-waf">
         <h3>ModSecurity WAF 차단 페이지</h3>
         <div class="facts">
           <div class="fact">
@@ -97,12 +97,31 @@
         <p class="detail-link"><a href="projects/modsecurity-waf/index.html">→ 상세 보기</a></p>
       </article>
 
-      <article class="project">
+      <article class="project" id="elasticsearch">
+        <h3>Elasticsearch 모니터링 구축</h3>
+        <div class="facts">
+          <div class="fact">
+            <span class="fact-label">문제</span>
+            <p>서버 리소스와 서비스 상태를 중앙에서 한눈에 보기 어려웠고, 장애 인지가 늦어지는 경우가 있었습니다.</p>
+          </div>
+          <div class="fact">
+            <span class="fact-label">조치</span>
+            <p>Elasticsearch + Kibana + Metricbeat를 구성하고 Apache HTTPS 프록시로 연동했습니다. Windows 서버에도 Metricbeat를 설치해 통합 모니터링을 구현했습니다.</p>
+          </div>
+          <div class="fact">
+            <span class="fact-label">결과</span>
+            <p>Linux와 Windows 서버의 메트릭을 한 대시보드에서 확인할 수 있게 되어 장애 인지 속도를 높였습니다.</p>
+          </div>
+        </div>
+        <p class="detail-link"><a href="projects/elasticsearch/index.html">→ 상세 보기</a></p>
+      </article>
+
+      <article class="project" id="ssl-proxy">
         <h3>SSL 리버스 프록시 구성</h3>
         <div class="facts">
           <div class="fact">
             <span class="fact-label">문제</span>
-            <p>웹 서버마다 인증서를 관리하면 만료 추적과 SSL 설정이 흩어졌습니다.</p>
+            <p>웹 서버마다 인증서를 관리하며 만료 추적과 SSL 설정이 흩어졌습니다.</p>
           </div>
           <div class="fact">
             <span class="fact-label">조치</span>
@@ -115,22 +134,23 @@
         </div>
       </article>
 
-      <article class="project">
+      <article class="project" id="central-auth">
         <h3>SSSD + LDAP/AD + RADIUS 중앙 인증</h3>
         <div class="facts">
           <div class="fact">
             <span class="fact-label">문제</span>
-            <p>서버마다 로컬 계정을 만들면 UID/GID와 비밀번호 정책이 어긋났습니다.</p>
+            <p>서버마다 로컬 계정을 만들며 UID/GID와 비밀번호 정책이 어긋났습니다.</p>
           </div>
           <div class="fact">
             <span class="fact-label">조치</span>
-            <p>LDAP/AD는 계정 속성, RADIUS는 비밀번호 검증을 맡기고, 서버는 SSSD와 PAM으로 연동했습니다.</p>
+            <p>LDAP/AD에 계정 속성, RADIUS에 비밀번호 검증을 맡기고, 서버는 SSSD와 PAM으로 연동했습니다.</p>
           </div>
           <div class="fact">
             <span class="fact-label">결과</span>
             <p>SSH 로그인을 중앙 계정으로 맞춰 서버별 계정 생성과 권한 불일치를 줄였습니다.</p>
           </div>
         </div>
+        <p class="detail-link"><a href="projects/central-auth/index.html">→ 상세 보기</a></p>
       </article>
     </section>
   </main>

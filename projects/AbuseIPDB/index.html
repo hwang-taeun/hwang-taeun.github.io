@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AbuseIPDB 기반 Apache 자동 차단 — 황태운</title>
+  <meta name="description" content="AbuseIPDB 블랙리스트 일괄 차단과 check API 실시간 조회로 Apache 악성 IP를 자동 차단하는 방법" />
+  <meta name="theme-color" content="#1a73e8" />
+  <link rel="stylesheet" href="../../assets/style.css" />
+</head>
+<body>
+  <main>
+    <a href="../../index.html" class="back-link">← 메인으로</a>
+
+    <header>
+      <p class="tagline">시스템 인프라 운영</p>
+      <h1>AbuseIPDB 기반 Apache 자동 차단</h1>
+      <p class="lead">AbuseIPDB 평판 데이터로 악성 IP를 자동 차단합니다. 블랙리스트를 주기적으로 받아 설정 파일로 만드는 <strong>일괄 차단</strong>과, 접속 IP를 그때그때 조회하는 <strong>실시간 차단</strong> 두 가지 방식을 정리했습니다.</p>
+    </header>
+
+    <section>
+      <h2>1. 개요</h2>
+      <ul>
+        <li><span class="highlight">A. 일괄 차단</span>: <code>blacklist</code> API로 위험 점수 90 이상 IP 목록을 받아 Apache 2.2(<code>Deny</code>) / 2.4(<code>Require</code>) 규칙 파일을 만들고 crontab으로 갱신합니다. 요청마다 조회하지 않아 성능 부담이 없습니다.</li>
+        <li><span class="highlight">B. 실시간 차단</span>: <code>check</code> API로 접속 IP의 위험 점수(<code>abuseConfidenceScore</code>, 0~100)를 조회해 기준 이상이면 403을 반환합니다. 목록에 아직 없는 신규 IP까지 막을 수 있습니다.</li>
+        <li><strong>권장 운영</strong>: A를 기본으로 적용하고 B를 보조로 쓰면, 이미 알려진 IP는 A에서 걸러지고 신규 IP만 조회하게 되어 API 호출 수가 줄어듭니다.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>2. 사전 준비 (공통)</h2>
+      <h3>패키지 설치</h3>
+      <p>API 응답을 파싱하는 <code>jq</code>와 호출용 <code>curl</code>이 필요합니다.</p>
+<pre><code>sudo dnf install -y jq curl</code></pre>
+
+      <h3>API 키 저장</h3>
+      <p>AbuseIPDB 계정에서 발급받은 API 키는 스크립트에 넣지 않고 별도 파일로 분리합니다.</p>
+<pre><code>sudo mkdir -p /etc/abuseipdb
+echo "발급받은_API_KEY" | sudo tee /etc/abuseipdb/api.key
+sudo chmod 600 /etc/abuseipdb/api.key</code></pre>
+    </section>
+
+    <section>
+      <h2>3. A. 일괄 차단 — 블랙리스트 규칙 파일 생성</h2>
+      <p>블랙리스트를 받아 국가별로 묶은 Apache 2.2 / 2.4 규칙 파일을 만들고, 서버의 Apache 버전에 맞는 파일을 적용합니다. 설정 검사에 실패하면 이전 파일로 되돌립니다.</p>
+<pre><code>#!/bin/bash
+# /usr/local/bin/abuseipdb_blacklist.sh
+set -euo pipefail
+
+API_KEY=$(&lt;/etc/abuseipdb/api.key)
+WORK_DIR="/var/lib/abuseipdb"
+JSON_FILE="$WORK_DIR/blacklist.json"
+CONF_DIR="/etc/httpd/conf.d"
+DENY_CONF="block_ips_deny.conf"         # Apache 2.2
+REQUIRE_CONF="block_ips_require.conf"   # Apache 2.4
+
+mkdir -p "$WORK_DIR"
+
+# 1. 블랙리스트 다운로드 (위험 점수 90 이상)
+curl -sf --max-time 60 -G https://api.abuseipdb.com/api/v2/blacklist \
+  --data-urlencode "confidenceMinimum=90" \
+  -H "Key: $API_KEY" -H "Accept: application/json" -o "$JSON_FILE.tmp"
+
+# 빈 응답이면 기존 규칙을 유지하고 종료
+jq -e '.data | length &gt; 0' "$JSON_FILE.tmp" &gt;/dev/null \
+  || { echo "Error: empty blacklist" &gt;&amp;2; exit 1; }
+mv "$JSON_FILE.tmp" "$JSON_FILE"
+
+# 2. 국가별로 정렬해 2.2 / 2.4 규칙 파일 동시 생성
+jq -r '.data[] | "\(.countryCode // "ZZ") \(.ipAddress)"' "$JSON_FILE" \
+| sort -k1,1 -k2,2V \
+| awk -v d="$(date '+%F %T')" \
+      -v deny="$WORK_DIR/$DENY_CONF" -v req="$WORK_DIR/$REQUIRE_CONF" '
+BEGIN {
+  print "# Auto-generated blacklist for Apache 2.2\n# Last updated: " d \
+        "\n&lt;Location \"/\"&gt;\n    Order allow,deny" &gt; deny
+  print "# Auto-generated blacklist for Apache 2.4\n# Last updated: " d \
+        "\n&lt;Location \"/\"&gt;\n    &lt;RequireAll&gt;\n        Require all granted" &gt; req
+}
+$1 != prev {
+  printf "\n    ######### %s #########\n", $1 &gt; deny
+  printf "\n        ######### %s #########\n", $1 &gt; req
+  prev = $1
+}
+{
+  print "    Deny from " $2 &gt; deny
+  print "        Require not ip " $2 &gt; req
+}
+END {
+  print "\n    Allow from all\n&lt;/Location&gt;" &gt; deny
+  print "    &lt;/RequireAll&gt;\n&lt;/Location&gt;" &gt; req
+}'
+
+# 3. Apache 버전에 맞는 파일 적용 → 검사 실패 시 롤백
+if httpd -v | grep -q 'Apache/2\.2'; then CONF=$DENY_CONF; else CONF=$REQUIRE_CONF; fi
+
+[ -f "$CONF_DIR/$CONF" ] &amp;&amp; cp -a "$CONF_DIR/$CONF" "$WORK_DIR/$CONF.bak"
+cp "$WORK_DIR/$CONF" "$CONF_DIR/$CONF"
+
+if apachectl configtest; then
+    apachectl graceful
+    echo "Applied: $CONF_DIR/$CONF ($(jq '.data | length' "$JSON_FILE") IPs)"
+else
+    echo "configtest failed, rollback" &gt;&amp;2
+    if [ -f "$WORK_DIR/$CONF.bak" ]; then
+        cp "$WORK_DIR/$CONF.bak" "$CONF_DIR/$CONF"
+    else
+        rm -f "$CONF_DIR/$CONF"
+    fi
+    exit 1
+fi</code></pre>
+
+      <h3>배치 및 주기 실행</h3>
+      <p>RHEL 계열은 <code>conf.d/*.conf</code>를 자동으로 읽으므로 <code>httpd.conf</code>에 <code>Include</code>를 따로 넣지 않아도 됩니다.</p>
+<pre><code>sudo install -m 750 abuseipdb_blacklist.sh /usr/local/bin/abuseipdb_blacklist.sh
+
+# crontab -e : 매주 월요일 04:00 갱신
+0 4 * * 1 /usr/local/bin/abuseipdb_blacklist.sh &gt;&gt; /var/log/abuseipdb_blacklist.log 2&gt;&amp;1</code></pre>
+
+      <h3>생성 파일 예시</h3>
+      <p><strong>Apache 2.2</strong> (<code>block_ips_deny.conf</code>)</p>
+<pre><code># Auto-generated blacklist for Apache 2.2
+# Last updated: 2025-01-03 15:27:32
+&lt;Location "/"&gt;
+    Order allow,deny
+
+    ######### AD #########
+    Deny from 109.111.112.83
+
+    ######### AE #########
+    Deny from 152.32.181.210
+    Deny from 154.85.78.192
+
+    Allow from all
+&lt;/Location&gt;</code></pre>
+      <p><strong>Apache 2.4</strong> (<code>block_ips_require.conf</code>)</p>
+<pre><code># Auto-generated blacklist for Apache 2.4
+# Last updated: 2025-01-03 15:27:32
+&lt;Location "/"&gt;
+    &lt;RequireAll&gt;
+        Require all granted
+
+        ######### AD #########
+        Require not ip 109.111.112.83
+
+        ######### AE #########
+        Require not ip 152.32.181.210
+        Require not ip 154.85.78.192
+    &lt;/RequireAll&gt;
+&lt;/Location&gt;</code></pre>
+
+      <h3>트러블슈팅: Apache 2.4 설정 오류</h3>
+      <ul>
+        <li><strong>증상</strong>: 초기 버전은 <code>&lt;RequireAll&gt;</code> 안에 <code>Require not ip</code>만 넣어, Apache 2.4에서 설정 로드 시 에러가 발생했습니다.</li>
+        <li><strong>원인</strong>: <code>&lt;RequireAll&gt;</code>은 부정 조건(<code>not</code>)만으로는 허용 대상이 없어 성립하지 않습니다.</li>
+        <li><strong>조치</strong>: <code>Require all granted</code>를 먼저 넣어 "모두 허용, 단 목록의 IP는 제외" 구조로 수정했습니다.</li>
+      </ul>
+
+      <h3>초기 버전 대비 개선 사항</h3>
+      <ul>
+        <li>API 키를 스크립트에서 분리하고, 인증서 검증을 끄는 <code>curl -k</code> 옵션을 제거했습니다.</li>
+        <li>IP마다 <code>grep</code>으로 파일을 다시 검색하던 방식을 <code>awk</code> 한 번으로 바꿔, 수천 개 IP도 바로 처리합니다.</li>
+        <li>생성 파일을 <code>conf.d</code>에 직접 배치하고, <code>configtest</code> 실패 시 자동 롤백합니다.</li>
+        <li>다운로드가 비어 있으면 기존 규칙을 그대로 유지합니다.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>4. B. 실시간 차단 — check API 조회</h2>
+      <p>Apache가 요청 IP를 외부 스크립트에 전달하고, 스크립트가 위험 점수를 조회해 <code>ALLOW</code> 또는 <code>BLOCK</code>을 돌려줍니다. mod_rewrite의 <code>RewriteMap prg</code>를 사용하며, 요청마다 API를 호출하면 지연과 조회 한도가 문제가 되므로 IP별 결과를 24시간 캐시합니다.</p>
+
+      <h3>추가 준비</h3>
+<pre><code># 캐시 디렉터리
+sudo mkdir -p /var/cache/abuseipdb
+
+# SELinux 사용 시: httpd의 외부 API 호출과 캐시 쓰기 허용
+sudo setsebool -P httpd_can_network_connect 1
+sudo semanage fcontext -a -t httpd_cache_t "/var/cache/abuseipdb(/.*)?"
+sudo restorecon -Rv /var/cache/abuseipdb</code></pre>
+
+      <h3>조회 스크립트</h3>
+      <p>IP를 한 줄씩 받아 <code>ALLOW</code> 또는 <code>BLOCK</code>을 한 줄씩 돌려줍니다. 기준 점수(<code>THRESHOLD</code>)와 캐시 시간은 상단 변수로 조정합니다.</p>
+<pre><code>#!/bin/bash
+# /usr/local/bin/abuseipdb_check.sh
+# Apache RewriteMap(prg)용: IP 한 줄을 입력받아 ALLOW 또는 BLOCK 한 줄을 출력한다.
+# 입력 한 줄당 반드시 출력 한 줄이 나와야 한다.
+
+API_KEY_FILE="/etc/abuseipdb/api.key"
+CACHE_DIR="/var/cache/abuseipdb"
+THRESHOLD=${THRESHOLD:-75}   # 이 점수 이상이면 차단 (0~100)
+MAX_AGE_DAYS=90              # 최근 N일 신고 기준
+CACHE_TTL=86400              # 정상 조회 결과 캐시 (24시간)
+ERR_TTL=300                  # 조회 실패 시 재시도 대기 (5분)
+API_TIMEOUT=2                # API 응답 대기 (초)
+
+API_KEY=$(&lt;"$API_KEY_FILE")
+mkdir -p "$CACHE_DIR"
+
+while read -r ip; do
+    # 1. IP 형식 검증 (이상한 입력은 통과 처리)
+    if [[ ! "$ip" =~ ^[0-9a-fA-F:.]+$ ]]; then
+        echo "ALLOW"; continue
+    fi
+
+    # 2. 사설/로컬 IP는 조회하지 않음 (조회 한도 절약)
+    case "$ip" in
+        127.*|10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*|::1)
+            echo "ALLOW"; continue ;;
+    esac
+
+    cache_file="$CACHE_DIR/${ip//:/_}"
+    now=$(date +%s)
+
+    # 3. 캐시 확인
+    if [ -f "$cache_file" ]; then
+        read -r ts score &lt; "$cache_file"
+        [[ "$ts" =~ ^[0-9]+$ ]] || ts=0
+        [[ "$score" =~ ^-?[0-9]+$ ]] || score=-1
+        if [ "$score" -ge 0 ]; then ttl=$CACHE_TTL; else ttl=$ERR_TTL; fi
+        if [ $((now - ts)) -lt "$ttl" ]; then
+            if [ "$score" -ge "$THRESHOLD" ]; then echo "BLOCK"; else echo "ALLOW"; fi
+            continue
+        fi
+    fi
+
+    # 4. AbuseIPDB 조회 (stdin을 읽지 않도록 &lt;/dev/null)
+    score=$(curl -s --max-time "$API_TIMEOUT" -G https://api.abuseipdb.com/api/v2/check \
+        --data-urlencode "ipAddress=$ip" \
+        --data-urlencode "maxAgeInDays=$MAX_AGE_DAYS" \
+        -H "Key: $API_KEY" -H "Accept: application/json" &lt;/dev/null \
+        | jq -r '.data.abuseConfidenceScore // empty')
+    [[ "$score" =~ ^[0-9]+$ ]] || score=-1
+
+    # 5. 결과 캐시 및 판정 (조회 실패는 통과 처리)
+    echo "$now $score" &gt; "$cache_file"
+    if [ "$score" -ge "$THRESHOLD" ]; then
+        logger -t abuseipdb "BLOCK ip=$ip score=$score"
+        echo "BLOCK"
+    else
+        echo "ALLOW"
+    fi
+done</code></pre>
+<pre><code>sudo install -m 750 abuseipdb_check.sh /usr/local/bin/abuseipdb_check.sh</code></pre>
+      <ul>
+        <li><strong>캐시</strong>: 같은 IP는 24시간 동안 API를 다시 호출하지 않습니다.</li>
+        <li><strong>실패 시 통과</strong>: API 오류나 시간 초과 때는 정상 사용자를 막지 않도록 통과시키고, 5분 뒤 다시 조회합니다.</li>
+        <li><strong>입력 검증</strong>: IP 형식이 아닌 값은 조회하지 않습니다.</li>
+      </ul>
+
+      <h3>Apache 적용</h3>
+      <p><code>RewriteMap</code>은 서버 설정이나 <code>VirtualHost</code> 안에서만 정의할 수 있고 <code>.htaccess</code>에서는 쓸 수 없습니다. 적용할 <code>VirtualHost</code> 안에 직접 넣습니다.</p>
+<pre><code>&lt;VirtualHost *:443&gt;
+    ServerName test.com
+    ServerAlias www.test.com
+    DocumentRoot /var/www/html
+
+    SSLEngine on
+    SSLCertificateFile /etc/letsencrypt/live/test.com/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/test.com/privkey.pem
+
+    # AbuseIPDB 실시간 조회 차단
+    RewriteEngine On
+    RewriteMap abuseip "prg:/usr/local/bin/abuseipdb_check.sh"
+    RewriteCond ${abuseip:%{REMOTE_ADDR}|ALLOW} =BLOCK
+    RewriteRule ^ - [F,L]
+&lt;/VirtualHost&gt;</code></pre>
+      <ul>
+        <li>Apache 2.2에서는 <code>RewriteLock</code> 설정이 필요합니다.</li>
+        <li>프록시나 CDN 뒤에 있다면 <code>mod_remoteip</code>로 실제 클라이언트 IP가 <code>REMOTE_ADDR</code>에 들어오게 먼저 설정해야 합니다.</li>
+      </ul>
+<pre><code>sudo apachectl configtest
+sudo systemctl restart httpd</code></pre>
+
+      <h3>동작 확인</h3>
+<pre><code># 일반 IP는 ALLOW
+printf '8.8.8.8\n' | /usr/local/bin/abuseipdb_check.sh
+
+# 기준 점수를 0으로 낮추면 어떤 IP든 BLOCK
+printf '1.1.1.1\n' | THRESHOLD=0 /usr/local/bin/abuseipdb_check.sh
+
+# 차단 로그
+journalctl -t abuseipdb --since today
+sudo tail -f /var/log/httpd/access_log | grep " 403 "</code></pre>
+
+      <h3>캐시 정리</h3>
+<pre><code># /etc/cron.daily/abuseipdb-cache-clean
+#!/bin/bash
+find /var/cache/abuseipdb -type f -mtime +7 -delete</code></pre>
+<pre><code>sudo chmod +x /etc/cron.daily/abuseipdb-cache-clean</code></pre>
+    </section>
+
+    <section>
+      <h2>5. 운영 시 주의사항</h2>
+      <ul>
+        <li><strong>조회 한도</strong>: API 요금제별로 일일 조회 수가 제한됩니다. 한도를 넘으면 조회가 실패하고 통과 처리됩니다.</li>
+        <li><strong>직렬 처리</strong>: <code>prg</code> 맵은 요청을 한 줄씩 순서대로 처리하므로 조회가 느리면 모든 요청이 지연됩니다. 그래서 API 대기 시간을 2초로 짧게 잡았습니다.</li>
+        <li><strong>오탐</strong>: 기준 점수를 낮출수록 정상 사용자가 차단될 수 있습니다. 75 이상으로 시작해 차단 로그를 보며 조정합니다.</li>
+        <li><strong>실행 권한</strong>: 스크립트는 httpd를 시작한 계정 권한으로 실행될 수 있으므로 입력 검증과 파일 권한(스크립트 750, API 키 600)을 지켜야 합니다.</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer>
+    <p>황태운 · 시스템 인프라 운영 관리자</p>
+  </footer>
+</body>
+</html>
