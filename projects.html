@@ -3,24 +3,6 @@
 #  - 상세 페이지가 있는 프로젝트: projects/<폴더>/index.html 머리말에 type: project 로 등록
 #  - 상세 페이지가 없는 프로젝트: 아래 extra_projects 에 등록
 extra_projects:
-  - title: Linux 서버 장애 감지 및 알림
-    short_title: 서버 장애 감지 알림
-    anchor: server-alert
-    order: 20
-    featured: true
-    summary: 리소스·프로세스·포트 점검 → Slack/SMS 알림
-    problem: >-
-      프로세스·포트 다운이나 리소스 이상을 사람이 로그를 보기 전까지 알기 어려웠습니다.
-    action: >-
-      <code>top</code>, <code>ps</code>, <code>df</code>, <code>uptime</code>과 프로세스·포트·서비스 로그를
-      점검하는 스크립트를 만들고 Slack·SMS로 보냈습니다.
-    result: >-
-      야간·무인 시간에도 이상 징후를 바로 받아 장애 인지 지연을 줄였습니다.
-    skill_group: 로그 모니터링·알림
-    skill: 프로세스·포트·리소스 점검 → Slack/SMS 장애 알림
-    link_label: 장애 감지 알림 프로젝트
-    skill_order: 30
-
   - title: SSL 리버스 프록시 구성
     short_title: SSL 리버스 프록시
     anchor: ssl-proxy

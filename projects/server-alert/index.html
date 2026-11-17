@@ -1,0 +1,305 @@
+---
+title: 서버 장애 SMS 알림 (알리고 · textbee · ELK)
+short_title: 서버 장애 SMS 알림
+type: project
+anchor: server-alert
+order: 20
+featured: true
+summary: bash 점검 + ELK 중앙 감시 → 알리고/textbee 문자 알림, 서버 다운까지 감지
+problem: >-
+  프로세스·포트 다운이나 디스크 부족을 사람이 로그를 보기 전까지 알기 어려웠고,
+  서버가 완전히 죽으면 그 서버에서 도는 점검 스크립트로는 알림조차 보낼 수 없었습니다.
+action: >-
+  bash로 서버별 점검 스크립트를 만들고, ELK(Metricbeat) 데이터를 중앙에서 조회해 수집이 끊긴 서버까지 찾도록 했습니다.
+  문자 발송은 알리고(문자 서비스 업체)와 textbee(안드로이드 폰 SMS 게이트웨이) 두 가지 중 설정 한 줄로 고를 수 있게 모듈화했습니다.
+result: >-
+  장애 발생·지속·복구 시점에만 문자가 와서 알림 피로 없이 야간·무인 시간 장애를 바로 알 수 있고,
+  서버 다운이나 감시 시스템(ELK) 자체 장애까지 놓치지 않게 되었습니다.
+skill_group: 로그 모니터링·알림
+skill_order: 30
+skill: bash·ELK 기반 장애 감지 → 알리고/textbee SMS 알림
+link_label: 서버 장애 SMS 알림 프로젝트
+---
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>서버 장애 SMS 알림 (알리고 · textbee · ELK) — 황태운</title>
+  <meta name="description" content="bash 점검 스크립트와 ELK 중앙 감시로 서버 장애를 감지하고, 알리고 또는 textbee.dev로 문자를 보내는 알림 시스템" />
+  <meta name="theme-color" content="#1a73e8" />
+  <link rel="stylesheet" href="../../assets/style.css" />
+  <style>
+    .table-wrap { overflow-x: auto; margin: 0.6rem 0 1rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+    th, td { border: 1px solid var(--border); padding: 0.5rem 0.7rem; text-align: left; vertical-align: top; }
+    th { background: var(--accent-soft); color: var(--accent); font-weight: 700; white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <main>
+    <a href="../../index.html" class="back-link">← 메인으로</a>
+
+    <header>
+      <p class="tagline">시스템 인프라 운영</p>
+      <h1>서버 장애 SMS 알림 (알리고 · textbee · ELK)</h1>
+      <p class="lead">bash 점검 스크립트와 ELK 중앙 감시로 장애를 찾아내고, 상태가 바뀔 때만 문자로 알려주는 알림 시스템입니다. 문자 발송은 알리고와 textbee.dev 중에서 고를 수 있습니다.</p>
+    </header>
+
+    <section>
+      <h2>1. 구성</h2>
+<pre><code>[각 서버]  server_check.sh (cron 1분)
+             디스크 · 메모리 · 부하 · 서비스 · 포트 · URL
+                 │
+[ELK 서버] elk_check.sh (cron 1분)      ◀── Metricbeat (Linux · Windows 서버)
+             수집 중단(서버 다운) · CPU · 메모리 · 디스크
+                 │
+            lib_common.sh  상태 비교 → 장애 / 지속 / 복구 판단 → 한 통으로 묶음
+                 │
+        ┌────────┴────────┐
+  sms_aligo.sh       sms_textbee.sh        ← alert.conf 의 SMS_PROVIDER 로 선택
+  (문자 서비스 업체)   (안드로이드 폰 SIM)</code></pre>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>파일</th><th>역할</th></tr></thead>
+          <tbody>
+            <tr><td><code>alert.conf</code></td><td>발송 업체, 수신자, 기준값, Elasticsearch 접속 정보</td></tr>
+            <tr><td><code>lib_common.sh</code></td><td>상태 관리(중복 방지·재알림·복구), 메시지 묶음 발송, 실행 잠금</td></tr>
+            <tr><td><code>sms_aligo.sh</code> / <code>sms_textbee.sh</code></td><td>문자 발송 모듈 (같은 <code>send_sms</code> 함수)</td></tr>
+            <tr><td><code>server_check.sh</code></td><td>기본: 서버 로컬 점검</td></tr>
+            <tr><td><code>elk_check.sh</code></td><td>심화: ELK 데이터로 전체 서버 중앙 점검</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>2. 알림 규칙</h2>
+      <p>매분 점검하더라도 같은 장애로 문자가 계속 오면 알림을 무시하게 됩니다. 점검 대상마다 상태 파일(<code>FAIL 시작시각 마지막알림시각</code>)을 두고, 상태가 바뀔 때만 보냅니다.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>상황</th><th>문자</th></tr></thead>
+          <tbody>
+            <tr><td>정상 → 장애</td><td><code>[장애] web01 디스크 /var 93% (기준 90%)</code></td></tr>
+            <tr><td>장애 지속</td><td>설정한 간격(기본 60분)마다 <code>[지속 1시간 5분] ...</code></td></tr>
+            <tr><td>장애 → 정상</td><td><code>[복구] web01 디스크 /var 70% (장애 시간 1시간 12분)</code></td></tr>
+            <tr><td>변화 없음</td><td>보내지 않음</td></tr>
+          </tbody>
+        </table>
+      </div>
+<pre><code># lib_common.sh (핵심 부분)
+check_result() {          # check_result &lt;키&gt; &lt;OK|FAIL&gt; &lt;대상&gt; &lt;상세&gt;
+    local key=$1 status=$2 target=$3 detail=$4
+    local f prev_status="OK" start=$NOW last=0
+    f=$(_state_file "$key")
+    [ -f "$f" ] &amp;&amp; read -r prev_status start last &lt; "$f"
+
+    if [ "$status" = "FAIL" ]; then
+        if [ "$prev_status" != "FAIL" ]; then                      # 새 장애
+            PENDING_MSGS+=("[장애] $target $detail")
+            PENDING_STATE+=("$f|FAIL $NOW $NOW")
+        elif [ $((NOW - last)) -ge $((REMIND_MIN * 60)) ]; then     # 장애 지속
+            PENDING_MSGS+=("[지속 $(_fmt_dur $((NOW - start)))] $target $detail")
+            PENDING_STATE+=("$f|FAIL $start $NOW")
+        fi
+    elif [ "$prev_status" = "FAIL" ]; then                         # 복구
+        PENDING_MSGS+=("[복구] $target $detail (장애 시간 $(_fmt_dur $((NOW - start))))")
+        PENDING_STATE+=("$f|")
+    fi
+}</code></pre>
+      <ul>
+        <li><strong>묶음 발송</strong>: 한 번 실행에서 생긴 알림은 한 통으로 합쳐 보냅니다.</li>
+        <li><strong>발송 실패 대비</strong>: 문자 발송에 성공했을 때만 상태를 저장하므로, 실패하면 다음 실행에서 다시 보냅니다.</li>
+        <li><strong>중복 실행 방지</strong>: 점검이 1분을 넘겨도 cron이 겹쳐 돌지 않도록 <code>flock</code>으로 잠급니다.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>3. 문자 발송: 두 가지 방식</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>구분</th><th>알리고</th><th>textbee.dev</th></tr></thead>
+          <tbody>
+            <tr><td>방식</td><td>문자 서비스 업체 API</td><td>본인 안드로이드 폰이 SIM으로 직접 발송</td></tr>
+            <tr><td>사전 준비</td><td>발신번호 등록, <strong>발송 서버 IP 등록</strong></td><td>폰에 textbee 앱 설치, API 키 발급</td></tr>
+            <tr><td>비용</td><td>건당 과금</td><td>통신사 요금제 (무료 플랜 있음)</td></tr>
+            <tr><td>장문</td><td>90바이트 초과 시 LMS 자동 전환</td><td>자동 분할 발송</td></tr>
+            <tr><td>주의</td><td>미등록 IP는 <code>-101</code> 인증 오류</td><td>폰이 꺼지거나 오프라인이면 발송 실패</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>두 모듈 모두 같은 <code>send_sms "메시지"</code> 함수를 제공하므로, 점검 스크립트는 고칠 필요 없이 설정 한 줄로 바꿉니다.</p>
+<pre><code># alert.conf
+SMS_PROVIDER="aligo"      # aligo | textbee</code></pre>
+
+      <h3>알리고 모듈 (핵심 부분)</h3>
+<pre><code># EUC-KR 기준 90바이트 초과 시 LMS
+if bytes=$(printf '%s' "$msg" | iconv -f UTF-8 -t EUC-KR 2&gt;/dev/null | wc -c) &amp;&amp; [ "$bytes" -le 90 ]; then
+    msg_type="SMS"
+else
+    msg_type="LMS"
+fi
+
+for attempt in 1 2; do
+    # 알리고는 등록된 IPv4로만 허용 → -4
+    resp=$(curl -4 -sS --max-time 15 https://apis.aligo.in/send/ \
+        --data-urlencode "user_id=$ALIGO_USER_ID" --data-urlencode "key=$ALIGO_API_KEY" \
+        --data-urlencode "sender=$ALIGO_SENDER"   --data-urlencode "receiver=$receivers" \
+        --data-urlencode "msg=$msg"               --data-urlencode "msg_type=$msg_type")
+    code=$(jq -r '.result_code | tostring' &lt;&lt;&lt;"$resp")
+    [ "$code" = "1" ] &amp;&amp; return 0
+    # IP 인증 오류(-101)일 때만 한 번 더 시도
+    [ "$code" = "-101" ] &amp;&amp; grep -q 'IP' &lt;&lt;&lt;"$resp" || break
+    sleep 1
+done
+return 1</code></pre>
+
+      <h3>textbee 모듈 (핵심 부분)</h3>
+<pre><code># 010... → +8210... (SIM 발송은 국제 형식이 가장 안전)
+for n in "${RECIPIENTS[@]}"; do
+    n=${n//[^0-9+]/}
+    [[ $n == 0* ]] &amp;&amp; n="${TEXTBEE_COUNTRY_CODE}${n#0}"
+    nums+=("$n")
+done
+
+body=$(jq -n --arg m "$msg" '{message: $m, recipients: $ARGS.positional}' --args "${nums[@]}")
+
+http=$(curl -sS -o "$resp_file" -w '%{http_code}' --max-time 20 \
+    -X POST "$TEXTBEE_BASE_URL/gateway/send-sms" \
+    -H "x-api-key: $TEXTBEE_API_KEY" -H 'Content-Type: application/json' -d "$body")
+
+# 200 = 대기열 접수 / 400 = 기기 오프라인 / 401 = 키 오류 / 429 = 요금제 한도
+[ "$http" = "200" ] &amp;&amp; [ "$(jq -r '.data.success' "$resp_file")" = "true" ]</code></pre>
+    </section>
+
+    <section>
+      <h2>4. 기본: 서버 로컬 점검 (server_check.sh)</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>항목</th><th>방법</th><th>기본 기준</th></tr></thead>
+          <tbody>
+            <tr><td>디스크</td><td><code>df -P</code> 마운트별 사용률</td><td>90% 이상</td></tr>
+            <tr><td>메모리</td><td><code>/proc/meminfo</code>의 MemAvailable 비율</td><td>10% 이하</td></tr>
+            <tr><td>부하</td><td>5분 load ÷ CPU 코어 수</td><td>코어당 2.0 이상</td></tr>
+            <tr><td>서비스</td><td><code>systemctl is-active</code></td><td>active 아님</td></tr>
+            <tr><td>포트</td><td>bash <code>/dev/tcp</code> 연결</td><td>3초 내 응답 없음</td></tr>
+            <tr><td>URL</td><td><code>curl</code> 응답 코드</td><td>2xx·3xx 아님</td></tr>
+          </tbody>
+        </table>
+      </div>
+<pre><code># 디스크 (마운트별)
+while read -r use mount; do
+    use=${use%\%}
+    if [ "$use" -ge "$DISK_PCT" ]; then
+        check_result "disk:$mount" FAIL "$HOST" "디스크 $mount ${use}% (기준 ${DISK_PCT}%)"
+    else
+        check_result "disk:$mount" OK   "$HOST" "디스크 $mount ${use}%"
+    fi
+done &lt; &lt;(df -P -x tmpfs -x devtmpfs -x overlay | awk 'NR&gt;1 {print $5, $6}')
+
+# TCP 포트
+for hp in "${PORTS[@]}"; do
+    h=${hp%:*}; p=${hp##*:}
+    if timeout 3 bash -c "exec 3&lt;&gt;/dev/tcp/$h/$p" 2&gt;/dev/null; then
+        check_result "port:$hp" OK   "$HOST" "포트 $hp 응답"
+    else
+        check_result "port:$hp" FAIL "$HOST" "포트 $hp 응답 없음"
+    fi
+done
+
+flush_alerts</code></pre>
+    </section>
+
+    <section>
+      <h2>5. 심화: ELK 중앙 점검 (elk_check.sh)</h2>
+      <h3>왜 필요한가</h3>
+      <p>서버가 완전히 죽거나 네트워크가 끊기면 그 서버의 <code>server_check.sh</code>는 문자를 보낼 수 없습니다. 이미 구축한 ELK에는 모든 서버의 Metricbeat 데이터가 모이므로, <strong>데이터가 끊긴 서버</strong>를 찾으면 서버 다운까지 감지할 수 있습니다.</p>
+      <p><a href="../elasticsearch/index.html" class="skill-link">→ Elasticsearch 모니터링 구축 프로젝트</a></p>
+
+      <h3>왜 Kibana 알림이 아니라 스크립트인가</h3>
+      <p>Kibana 무료(Basic) 라이선스는 알림 커넥터가 Index와 Server log 두 가지뿐이라 외부로 문자를 보낼 수 없습니다(Webhook은 유료). 그래서 스크립트가 Elasticsearch를 직접 조회해 판단하고, 발송은 위의 모듈을 그대로 씁니다.</p>
+
+      <h3>점검 항목</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>항목</th><th>Metricbeat 필드</th><th>판단</th></tr></thead>
+          <tbody>
+            <tr><td>수집 중단</td><td><code>host.name</code>별 최신 <code>@timestamp</code></td><td>5분 이상 데이터 없음 → 서버 다운·네트워크 단절 의심</td></tr>
+            <tr><td>CPU</td><td><code>system.cpu.total.norm.pct</code></td><td>최근 5분 평균 90% 이상</td></tr>
+            <tr><td>메모리</td><td><code>system.memory.actual.used.pct</code></td><td>최근 5분 평균 90% 이상</td></tr>
+            <tr><td>디스크</td><td><code>system.filesystem.used.pct</code></td><td>마운트별 최근 10분 최대 90% 이상</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>수집 중단 감지 쿼리</h3>
+<pre><code>HOSTS_JSON=$(es_search '{
+  "size": 0,
+  "query": { "range": { "@timestamp": { "gte": "now-24h" } } },
+  "aggs": { "hosts": {
+      "terms": { "field": "host.name", "size": 1000 },
+      "aggs": { "last_seen": { "max": { "field": "@timestamp" } } }
+  } }
+}')
+
+# Elasticsearch 조회 자체가 실패하면 그것도 장애로 알림 (감시 시스템 자체 감시)
+if [ $? -ne 0 ]; then
+    check_result "elk:query" FAIL "ELK" "Elasticsearch 조회 실패"
+    flush_alerts; exit 1
+fi
+
+while read -r host last_ms; do
+    age_min=$(( (NOW - last_ms / 1000) / 60 ))
+    if [ "$age_min" -ge "$ELK_NODATA_MIN" ]; then
+        check_result "elk:nodata:$host" FAIL "$host" "수집 중단 ${age_min}분 (서버 다운 또는 네트워크 단절 의심)"
+    else
+        check_result "elk:nodata:$host" OK   "$host" "수집 재개"
+    fi
+done &lt; &lt;(jq -r '.aggregations.hosts.buckets[] | "\(.key) \(.last_seen.value | floor)"' &lt;&lt;&lt;"$HOSTS_JSON")</code></pre>
+      <p>최근 24시간 안에 데이터를 보낸 적이 있는 호스트를 감시 대상으로 보므로, 서버를 새로 추가해도 설정을 바꿀 필요가 없습니다. Linux와 Windows 서버 모두 같은 방식으로 점검합니다.</p>
+    </section>
+
+    <section>
+      <h2>6. 발송 예시</h2>
+<pre><code>[서버알림] 11/17 05:08
+[장애] db01 수집 중단 20분 (서버 다운 또는 네트워크 단절 의심)
+[장애] web01 CPU 95% (5분 평균, 기준 90%)
+[장애] web01 디스크 /data 97% (기준 90%)
+[장애] win01 디스크 C:\ 91% (기준 90%)</code></pre>
+<pre><code>[서버알림] 11/17 05:31
+[복구] db01 수집 재개 (장애 시간 23분)</code></pre>
+      <p><code>DRY_RUN=1</code>로 실행하면 실제로 보내지 않고 화면에만 출력해, 기준값과 문구를 미리 확인할 수 있습니다.</p>
+<pre><code>DRY_RUN=1 /opt/server-alert/server_check.sh
+
+# cron 등록
+* * * * * /opt/server-alert/server_check.sh     # 각 서버
+* * * * * /opt/server-alert/elk_check.sh        # ELK 서버</code></pre>
+    </section>
+
+    <section>
+      <h2>7. 검증</h2>
+      <p>각 API 응답을 모의로 만들어 다음 상황을 시험했습니다.</p>
+      <ul>
+        <li>장애 발생 → 변화 없음(미발송) → 60분 경과 재알림 → 복구 순서</li>
+        <li>알리고 IP 인증 오류(<code>-101</code>) 후 재시도 성공</li>
+        <li>textbee 번호 국제 형식 변환, 기기 오프라인(400) 시 상태 미저장 후 재시도</li>
+        <li>ELK 수집 중단·복구 감지, 제외 호스트 처리, Elasticsearch 접속 실패 알림</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>8. 운영 시 주의사항</h2>
+      <ul>
+        <li><strong>ELK 서버 자신</strong>: ELK 서버가 죽으면 중앙 점검도 멈추므로, ELK 서버에서도 <code>server_check.sh</code>로 elasticsearch·kibana 서비스와 9200 포트를 점검합니다.</li>
+        <li><strong>비밀값</strong>: API 키가 든 <code>alert.conf</code>와 ES 비밀번호 파일은 600 권한으로 두고, 웹 루트 밖에 둡니다. Elasticsearch는 <code>metricbeat-*</code> 읽기 전용 계정으로 조회합니다.</li>
+        <li><strong>textbee 기기 관리</strong>: 알림용 폰은 충전과 네트워크 연결을 유지해야 하며, 장애 시 폰 상태도 함께 확인합니다.</li>
+        <li><strong>점검 대상 제거</strong>: 장애 중이던 대상을 설정에서 빼면 상태 파일이 남으므로 함께 지웁니다.</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer>
+    <p>황태운 · 시스템 인프라 운영 관리자</p>
+  </footer>
+</body>
+</html>
