@@ -1,0 +1,152 @@
+---
+title: Ollama 로컬 LLM 구축 및 웹 연동
+skill_group: 웹 & 네트워크 서비스
+skill_order: 60
+skill: Ollama 로컬 LLM 설치, 한국어 GGUF 모델 등록, PHP 웹 연동
+link_label: Ollama 로컬 LLM 상세
+---
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Ollama 로컬 LLM 구축 및 웹 연동 — 황태운</title>
+  <meta name="description" content="Ollama로 서버에 로컬 LLM을 설치하고 한국어 GGUF 모델을 등록한 뒤 PHP 웹 페이지에서 질의응답을 구현" />
+  <meta name="theme-color" content="#1a73e8" />
+  <link rel="stylesheet" href="../../assets/style.css" />
+  <style>
+    .screenshot { margin: 0.8rem 0 1.2rem; }
+    .screenshot img { display: block; max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 8px; }
+    .screenshot figcaption { margin-top: 0.4rem; color: var(--muted); font-size: 0.88rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <a href="../../index.html" class="back-link">← 메인으로</a>
+
+    <header>
+      <p class="tagline">시스템 인프라 운영</p>
+      <h1>Ollama 로컬 LLM 구축 및 웹 연동</h1>
+      <p class="lead">외부 AI 서비스로 데이터를 보내지 않도록, 서버에 Ollama로 LLM을 직접 띄우고 PHP 웹 페이지에서 질문할 수 있게 구성했습니다.</p>
+    </header>
+
+    <section>
+      <h2>1. 설치 및 기본 실행</h2>
+<pre><code>curl -fsSL https://ollama.com/install.sh | sh
+
+ollama run mistral     # 모델 다운로드 후 대화형 실행
+ollama list            # 설치된 모델 확인
+ollama rm mistral      # 모델 삭제</code></pre>
+      <p>설치 가능한 모델과 필요한 사양은 <a href="https://ollama.com/library" target="_blank" rel="noopener">ollama.com/library</a>에서 확인합니다.</p>
+    </section>
+
+    <section>
+      <h2>2. 한국어 모델 등록 (GGUF)</h2>
+      <p>기본 모델은 한국어 답변 품질이 낮아, Hugging Face에서 한국어 튜닝 모델(KULLM 계열)의 GGUF 파일을 내려받아 Ollama에 직접 등록했습니다.</p>
+<pre><code># Modelfile
+FROM ./kullm-model.Q2_K.gguf          # 내려받은 GGUF 파일 경로
+PARAMETER temperature 0.7             # 답변의 무작위성 (낮을수록 일관적)
+PARAMETER top_p 0.9
+TEMPLATE """&lt;s&gt;[INST] {% raw %}{{ .Prompt }}{% endraw %} [/INST]"""</code></pre>
+<pre><code>ollama create kullm-local -f ./Modelfile    # 모델 등록
+ollama list
+ollama run kullm-local                      # 실행 테스트</code></pre>
+      <figure class="screenshot">
+        <img src="images/ollama-list.png" alt="ollama list 에 kullm-local 모델 등록 확인" loading="lazy" />
+        <figcaption>커스텀 모델 kullm-local 등록 (2.9 GB)</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/ollama-run.png" alt="kullm-local 모델에 한국어로 질문하고 답변을 받은 화면" loading="lazy" />
+        <figcaption>터미널에서 한국어 질의응답 테스트</figcaption>
+      </figure>
+      <p>Q2_K는 용량을 크게 줄인 양자화 버전이라 메모리는 적게 쓰지만 답변이 어색해질 수 있습니다. 서버 메모리에 여유가 있으면 Q4 이상을 권장합니다.</p>
+    </section>
+
+    <section>
+      <h2>3. 웹 연동 (PHP)</h2>
+
+      <h3>응답 대기 시간 늘리기</h3>
+      <p>CPU로 답변을 생성하면 수십 초 이상 걸려 기본 타임아웃에 걸립니다. Apache와 PHP-FPM 연결 대기 시간을 늘렸습니다.</p>
+<pre><code># /etc/httpd/conf.d/timeout.conf
+Timeout 600
+ProxyTimeout 600      # httpd → PHP-FPM(proxy_fcgi) 응답 대기</code></pre>
+
+      <h3>SELinux</h3>
+      <p>httpd(PHP)가 Ollama API(<code>127.0.0.1:11434</code>)에 접속하려면 네트워크 연결을 허용해야 합니다.</p>
+<pre><code>setsebool -P httpd_can_network_connect 1</code></pre>
+
+      <h3>질의응답 페이지</h3>
+<pre><code>&lt;?php
+set_time_limit(600);
+$answer = '';
+$error  = '';
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $question = $_POST['question'] ?? '';
+
+    // Ollama API 호출 (stream=false: 답변을 한 번에 받음)
+    $ch = curl_init('http://127.0.0.1:11434/api/generate');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER =&gt; true,
+        CURLOPT_POST           =&gt; true,
+        CURLOPT_HTTPHEADER     =&gt; ['Content-Type: application/json'],
+        CURLOPT_POSTFIELDS     =&gt; json_encode([
+            'model'  =&gt; 'kullm-local',
+            'prompt' =&gt; $question,
+            'stream' =&gt; false,
+        ]),
+    ]);
+    $response = curl_exec($ch);
+
+    if (curl_errno($ch)) {
+        $error = 'cURL 오류: ' . curl_error($ch);
+    } else {
+        $result = json_decode($response, true);
+        $answer = $result['response'] ?? '응답 오류';
+    }
+    curl_close($ch);
+}
+?&gt;
+&lt;!DOCTYPE html&gt;
+&lt;html lang="ko"&gt;
+&lt;head&gt;&lt;meta charset="UTF-8"&gt;&lt;title&gt;Ollama Q&amp;A&lt;/title&gt;&lt;/head&gt;
+&lt;body&gt;
+  &lt;h1&gt;Ollama Q&amp;A&lt;/h1&gt;
+  &lt;form method="post"&gt;
+    &lt;textarea name="question" rows="5" cols="60" placeholder="질문을 입력하세요"&gt;&lt;?= htmlspecialchars($_POST['question'] ?? '') ?&gt;&lt;/textarea&gt;&lt;br&gt;
+    &lt;button type="submit"&gt;질문하기&lt;/button&gt;
+  &lt;/form&gt;
+
+  &lt;?php if ($answer): ?&gt;
+    &lt;h3&gt;Ollama의 답변:&lt;/h3&gt;
+    &lt;pre&gt;&lt;?= htmlspecialchars($answer) ?&gt;&lt;/pre&gt;
+  &lt;?php endif; ?&gt;
+
+  &lt;?php if ($error): ?&gt;
+    &lt;h3 style="color: red"&gt;에러:&lt;/h3&gt;
+    &lt;pre&gt;&lt;?= htmlspecialchars($error) ?&gt;&lt;/pre&gt;
+  &lt;?php endif; ?&gt;
+&lt;/body&gt;
+&lt;/html&gt;</code></pre>
+      <figure class="screenshot">
+        <img src="images/ollama-web-qa.png" alt="웹 페이지에서 질문하고 Ollama 답변을 받은 화면" loading="lazy" />
+        <figcaption>웹 페이지에서 질문과 답변</figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>4. 운영 시 주의사항</h2>
+      <ul>
+        <li><strong>API 외부 노출 금지</strong>: Ollama API(11434)는 인증이 없으므로 기본값인 <code>127.0.0.1</code>에만 열어 두고 방화벽에서 막습니다.</li>
+        <li><strong>웹 페이지 접근 제한</strong>: 누구나 질문할 수 있으면 서버 자원을 무제한으로 쓰게 됩니다. Basic Auth나 사내 IP 제한을 둡니다.</li>
+        <li><strong>출력 이스케이프</strong>: 모델 답변도 외부 입력처럼 다뤄 <code>htmlspecialchars</code>로 출력합니다.</li>
+        <li><strong>자원</strong>: 모델은 실행 중 메모리에 올라가므로 모델 크기 이상의 여유 메모리가 필요하고, GPU가 없으면 답변이 느립니다.</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer>
+    <p>황태운 · 시스템 인프라 운영 관리자</p>
+  </footer>
+</body>
+</html>

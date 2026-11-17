@@ -1,0 +1,152 @@
+---
+title: 프라이빗 Git 서버 구축 (Apache Smart HTTP)
+skill_group: 자동화 스크립트
+skill_order: 45
+skill: Apache + git-http-backend 기반 프라이빗 Git 서버 구축 (HTTPS·Basic Auth·SELinux)
+link_label: 프라이빗 Git 서버 구축 상세
+---
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>프라이빗 Git 서버 구축 — 황태운</title>
+  <meta name="description" content="Rocky Linux에서 Apache와 git-http-backend로 HTTPS 기반 프라이빗 Git 서버를 구축하고 push·clone·서버 측 검증까지 정리" />
+  <meta name="theme-color" content="#1a73e8" />
+  <link rel="stylesheet" href="../../assets/style.css" />
+</head>
+<body>
+  <main>
+    <a href="../../index.html" class="back-link">← 메인으로</a>
+
+    <header>
+      <p class="tagline">시스템 인프라 운영</p>
+      <h1>프라이빗 Git 서버 구축 (Apache Smart HTTP)</h1>
+      <p class="lead">외부 Git 호스팅 없이, Apache와 <code>git-http-backend</code>로 HTTPS 기반 사내용 Git 서버를 구축하고 업로드·다운로드·서버 측 검증까지 정리했습니다.</p>
+    </header>
+
+    <section>
+      <h2>1. 서버 설정 (Rocky Linux)</h2>
+
+      <h3>패키지 설치 및 저장소 생성</h3>
+<pre><code>dnf install -y git httpd mod_ssl
+mkdir -p /var/www/git
+
+# bare 저장소: 작업 파일 없이 Git 데이터만 가진 서버용 저장소 (push/pull 전용)
+git init --bare /var/www/git/project.git</code></pre>
+
+      <h3>권한 (공동 작업용 SGID)</h3>
+<pre><code>chown -R apache:apache /var/www/git
+chmod -R 775 /var/www/git
+
+# SGID: 새로 생기는 파일·폴더가 부모 그룹(apache)을 그대로 상속
+find /var/www/git -type d -exec chmod g+s {} +
+
+# 여러 사용자가 push 해도 그룹 쓰기 권한 유지
+git config -f /var/www/git/project.git/config core.sharedRepository group</code></pre>
+
+      <h3>HTTP push/pull 허용 및 강제 push 차단</h3>
+<pre><code>CFG=/var/www/git/project.git/config
+git config -f $CFG http.receivepack true          # HTTP push 허용 (기본 false)
+git config -f $CFG http.uploadpack true           # HTTP clone/fetch 허용 (명시적 선언)
+git config -f $CFG receive.denyNonFastForwards true   # git push -f 로 이력 덮어쓰기 차단</code></pre>
+    </section>
+
+    <section>
+      <h2>2. Apache 설정</h2>
+
+      <h3>인증 계정</h3>
+<pre><code>htpasswd -c /etc/httpd/.htpasswd developer     # -c 는 최초 생성 시에만
+chown root:apache /etc/httpd/.htpasswd
+chmod 640 /etc/httpd/.htpasswd</code></pre>
+
+      <h3>VirtualHost (/etc/httpd/conf.d/git.conf)</h3>
+      <p><code>/git/</code>으로 들어온 요청을 Git 백엔드로 넘기고, 모든 요청에 로그인을 요구합니다.</p>
+<pre><code>&lt;VirtualHost *:443&gt;
+    ServerName git.example.com
+
+    SSLEngine on
+    SSLCertificateFile    /etc/pki/tls/example.com/fullchain.pem
+    SSLCertificateKeyFile /etc/pki/tls/example.com/privkey.pem
+
+    # Git Smart HTTP
+    SetEnv GIT_PROJECT_ROOT /var/www/git
+    SetEnv GIT_HTTP_EXPORT_ALL
+    ScriptAlias /git/ /usr/libexec/git-core/git-http-backend/
+
+    &lt;Location /git/&gt;
+        AuthType Basic
+        AuthName "Private Git"
+        AuthUserFile /etc/httpd/.htpasswd
+        Require valid-user
+    &lt;/Location&gt;
+&lt;/VirtualHost&gt;</code></pre>
+      <p>인증서는 Let's Encrypt로 발급받아 전용 디렉터리에 둡니다.
+        <a href="../letsencrypt/index.html" class="skill-link">→ 무료 인증서 발급 상세</a>
+      </p>
+    </section>
+
+    <section>
+      <h2>3. SELinux 및 방화벽</h2>
+<pre><code># 인증서 디렉터리: 인증서 타입
+semanage fcontext -a -t cert_t "/etc/pki/tls/example.com(/.*)?"
+restorecon -Rv /etc/pki/tls/example.com
+
+# 저장소: Apache 읽기+쓰기 (httpd_sys_content_t 는 읽기 전용이라 push 불가)
+semanage fcontext -a -t httpd_sys_rw_content_t "/var/www/git(/.*)?"
+restorecon -Rv /var/www/git
+
+# 방화벽
+firewall-cmd --permanent --add-service=https
+firewall-cmd --reload
+
+apachectl configtest &amp;&amp; systemctl restart httpd</code></pre>
+      <p>push가 거부되면 SELinux 차단 원인을 바로 확인합니다.</p>
+<pre><code>ausearch -m AVC -ts recent | audit2why</code></pre>
+    </section>
+
+    <section>
+      <h2>4. 클라이언트: 최초 업로드</h2>
+<pre><code># 최초 1회: 커밋 작성자 정보
+git config --global user.name  "Developer"
+git config --global user.email "dev@example.com"
+
+# 원격 저장소 주소 지정 (기존 origin 이 있으면 set-url, 없으면 add)
+cd ~/project
+git remote set-url origin https://git.example.com/git/project.git
+git remote -v
+
+# -u : 로컬 main 과 origin/main 을 추적 관계로 연결 → 이후 git push / git pull 만 입력
+git push -u origin main</code></pre>
+      <ul>
+        <li><strong>인증 정보 캐시</strong>: <code>git config --global credential.helper 'cache --timeout=3600'</code>은 메모리에 1시간 보관합니다. <code>store</code>는 홈 디렉터리에 평문으로 저장되므로 공용 PC에서는 쓰지 않습니다.</li>
+        <li><strong>서버에서 직접 수정 금지</strong>: bare 저장소를 서버에서 직접 건드리면 클라이언트 push 시 non-fast-forward 에러가 납니다.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>5. 다른 PC에서 내려받기 및 서버 측 검증</h2>
+<pre><code># 다른 클라이언트: 전체 이력 복제
+git clone https://git.example.com/git/project.git /path/to/workdir</code></pre>
+      <p>bare 저장소에는 작업 디렉터리가 없으므로 <code>--git-dir</code>로 저장소를 지정해 체크아웃 없이 내용을 확인합니다.</p>
+<pre><code>REPO=/var/www/git/project.git
+git --git-dir=$REPO show main:              # main 브랜치 최상위 파일 목록 (끝의 콜론 = 트리)
+git --git-dir=$REPO show main:deploy.sh     # 특정 파일 내용 바로 출력
+git --git-dir=$REPO log --oneline -10       # 최근 커밋 10개
+git --git-dir=$REPO branch -a               # 브랜치 목록
+git --git-dir=$REPO fsck                    # 저장소 무결성 검사</code></pre>
+    </section>
+
+    <section>
+      <h2>6. 활용</h2>
+      <p>이 Git 서버를 배포 스크립트와 작업 정의의 저장소로 쓰면, 누가 언제 무엇을 바꿨는지 이력이 남고 서버마다 같은 버전을 내려받을 수 있습니다.
+        <a href="../../projects/cicd-polling/index.html" class="skill-link">→ CI/CD 배포 자동화 프로젝트</a>
+      </p>
+    </section>
+  </main>
+
+  <footer>
+    <p>황태운 · 시스템 인프라 운영 관리자</p>
+  </footer>
+</body>
+</html>
