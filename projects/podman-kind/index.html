@@ -1,0 +1,225 @@
+---
+title: Podman 컨테이너 구성 및 kind 기반 HA 실습
+short_title: Podman · Kubernetes HA
+type: project
+anchor: podman-kind
+order: 90
+featured: false
+summary: Podman으로 WEB/DB 컨테이너 구성 → kind 멀티 노드 클러스터에 배포
+problem: >-
+  서버마다 수동으로 패키지와 설정을 맞추다 보니 환경 차이로 인한 문제가 생기고, 서비스 장애 시 복구가 느렸습니다.
+action: >-
+  rootless·데몬리스인 Podman으로 PHP-Apache와 MariaDB 이미지를 빌드하고, kind로 멀티 노드 Kubernetes 클러스터를 만들어
+  복제본 3개로 배포했습니다.
+result: >-
+  설정이 이미지에 포함되어 어느 노드에서든 같은 환경으로 실행되고, 파드를 삭제해도 즉시 다시 만들어지는 자가 치유를 확인했습니다.
+skill_group: 고가용성(HA) & 컨테이너
+skill_order: 30
+skill: Podman 컨테이너 빌드·운영, kind 기반 Kubernetes 배포
+link_label: Podman · kind 프로젝트
+---
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Podman 컨테이너 구성 및 kind 기반 HA 실습 — 황태운</title>
+  <meta name="description" content="Podman으로 WEB/DB 컨테이너 이미지를 빌드하고 kind 멀티 노드 Kubernetes 클러스터에 배포해 자가 치유를 확인한 기록" />
+  <meta name="theme-color" content="#1a73e8" />
+  <link rel="stylesheet" href="../../assets/style.css" />
+  <style>
+    .table-wrap { overflow-x: auto; margin: 0.6rem 0 1rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+    th, td { border: 1px solid var(--border); padding: 0.5rem 0.7rem; text-align: left; vertical-align: top; }
+    th { background: var(--accent-soft); color: var(--accent); font-weight: 700; white-space: nowrap; }
+    .screenshot { margin: 0.8rem 0 1.2rem; }
+    .screenshot img { display: block; max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 8px; }
+    .screenshot figcaption { margin-top: 0.4rem; color: var(--muted); font-size: 0.88rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <a href="../../index.html" class="back-link">← 메인으로</a>
+
+    <header>
+      <p class="tagline">시스템 인프라 운영</p>
+      <h1>Podman 컨테이너 구성 및 kind 기반 HA 실습</h1>
+      <p class="lead">Podman으로 WEB/DB 컨테이너를 만들고, kind로 띄운 멀티 노드 Kubernetes 클러스터에 배포해 복제본 유지와 자가 치유를 확인했습니다.</p>
+    </header>
+
+    <section>
+      <h2>1. 왜 Podman과 kind인가</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>구분</th><th>Docker</th><th>Podman</th></tr></thead>
+          <tbody>
+            <tr><td>구조</td><td>데몬 기반 (dockerd)</td><td>데몬리스</td></tr>
+            <tr><td>권한</td><td>기본적으로 root 필요</td><td>rootless 지원</td></tr>
+            <tr><td>보안</td><td>데몬에 권한 집중</td><td>사용자 단위로 권한 분리</td></tr>
+            <tr><td>systemd 연동</td><td>제한적</td><td>서비스 단위로 자연스럽게 연동</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><strong>kind</strong>(Kubernetes in Docker)는 컨테이너 안에 Kubernetes 노드를 띄우는 도구입니다. 서버 한 대로 멀티 노드 클러스터를 1분 안에 만들 수 있어 HA 동작을 실습하기 좋습니다.</p>
+    </section>
+
+    <section>
+      <h2>2. 설치</h2>
+<pre><code>dnf install -y podman
+
+# kind 설치
+curl -Lo /usr/local/bin/kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+chmod +x /usr/local/bin/kind
+kind version
+
+# kind가 Docker 대신 Podman을 쓰도록 지정
+export KIND_EXPERIMENTAL_PROVIDER=podman</code></pre>
+    </section>
+
+    <section>
+      <h2>3. 이미지 빌드 및 컨테이너 실행</h2>
+      <p>컨테이너 안에서 직접 고친 설정은 다른 노드로 옮겨지지 않습니다. 그래서 <code>httpd.conf</code>, <code>my.cnf</code>, <code>php.ini</code> 같은 설정 파일을 빌드 컨텍스트에 두고 이미지에 포함시켰습니다.</p>
+
+      <h3>DB 이미지 (Dockerfile.db)</h3>
+<pre><code>FROM docker.io/library/mariadb:latest
+COPY my.cnf /etc/mysql/conf.d/my.cnf
+EXPOSE 3306</code></pre>
+
+      <h3>WEB 이미지 (Dockerfile.web)</h3>
+<pre><code>FROM docker.io/library/php:8.2-apache
+
+# 필수 패키지 및 PHP 확장
+RUN apt-get update &amp;&amp; apt-get install -y libmariadb-dev openssl ssl-cert tzdata \
+ &amp;&amp; docker-php-ext-install pdo pdo_mysql \
+ &amp;&amp; apt-get clean &amp;&amp; rm -rf /var/lib/apt/lists/*
+
+# OS 및 PHP 타임존 (서울)
+ENV TZ=Asia/Seoul
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime &amp;&amp; echo $TZ &gt; /etc/timezone \
+ &amp;&amp; printf "[Date]\ndate.timezone = Asia/Seoul\n" &gt; /usr/local/etc/php/conf.d/tzone.ini
+
+# 사용자 Apache 설정 포함
+RUN mkdir -p /etc/apache2/conf.d/custom
+COPY custom-apache.conf /etc/apache2/conf.d/custom/custom-apache.conf
+RUN a2enmod rewrite ssl \
+ &amp;&amp; echo "IncludeOptional /etc/apache2/conf.d/*/*.conf" &gt;&gt; /etc/apache2/apache2.conf
+
+WORKDIR /var/www/html</code></pre>
+
+      <h3>빌드 및 실행</h3>
+<pre><code># 마지막 인자는 빌드 컨텍스트: 이 폴더의 파일(my.cnf 등)이 COPY 대상
+podman build -t db-server:v1  -f Dockerfile.db  ./db/conf/
+podman build -t web-server:v1 -f Dockerfile.web ./web/conf/
+
+# DB 비밀번호는 이미지에 넣지 않고 실행 시 Podman secret으로 전달
+printf '%s' 'DB_ROOT_PASSWORD' | podman secret create db_root_pw -
+podman run -d --name db-server  --secret db_root_pw,type=env,target=MARIADB_ROOT_PASSWORD db-server:v1
+podman run -d --name web-server -p 8080:80 web-server:v1
+
+# 컨테이너 간 네트워크
+podman network create app-network
+podman network connect app-network db-server
+podman network connect app-network web-server</code></pre>
+
+      <figure class="screenshot">
+        <img src="images/container-network-check.png" alt="web-server 컨테이너에서 db-server 3306 포트 연결 성공" loading="lazy" />
+        <figcaption>web-server 컨테이너에서 컨테이너 이름(db-server)으로 DB 포트 연결 확인</figcaption>
+      </figure>
+
+      <h3>단일 서버 자동 시작 (kind 미사용 시)</h3>
+<pre><code>podman generate systemd --name db-server  --files --restart-policy=always
+podman generate systemd --name web-server --files --restart-policy=always
+cp container-*.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now container-db-server container-web-server</code></pre>
+      <p>Podman 4.4 이상에서는 <code>podman generate systemd</code> 대신 Quadlet(<code>/etc/containers/systemd/*.container</code>) 방식이 권장됩니다.</p>
+    </section>
+
+    <section>
+      <h2>4. kind 멀티 노드 클러스터</h2>
+<pre><code># kind-ha.yaml
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+- role: worker
+- role: worker
+- role: worker</code></pre>
+<pre><code>kind create cluster --name my-cluster --config kind-ha.yaml
+kubectl get nodes</code></pre>
+      <figure class="screenshot">
+        <img src="images/kind-nodes.png" alt="control-plane 1대와 worker 3대가 Ready 상태" loading="lazy" />
+        <figcaption>control-plane 1대 + worker 3대 Ready</figcaption>
+      </figure>
+
+      <h3>로컬 이미지를 클러스터로 전달</h3>
+      <p>Podman 환경에서는 <code>kind load docker-image</code>가 이미지를 찾지 못하는 경우가 있어, tar로 저장한 뒤 불러왔습니다.</p>
+<pre><code>podman save -o web-server.tar localhost/web-server:v1
+kind load image-archive web-server.tar --name my-cluster</code></pre>
+    </section>
+
+    <section>
+      <h2>5. 배포 및 자가 치유 확인</h2>
+<pre><code># web-deploy.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-server
+spec:
+  replicas: 3                     # 복제본 3개 유지
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+      - name: php-apache
+        image: localhost/web-server:v1
+        imagePullPolicy: IfNotPresent   # 클러스터에 불러온 로컬 이미지 사용
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-server-service
+spec:
+  type: NodePort
+  selector:
+    app: web
+  ports:
+  - port: 80
+    targetPort: 80
+    nodePort: 30080               # 외부 접속 포트 (30000-32767)</code></pre>
+<pre><code>kubectl apply -f web-deploy.yaml
+kubectl get pods -o wide</code></pre>
+
+      <figure class="screenshot">
+        <img src="images/kind-pods.png" alt="파드 3개가 서로 다른 워커 노드에 분산 배치" loading="lazy" />
+        <figcaption>같은 방식으로 배포한 db-server 파드 3개가 워커 노드 3대에 하나씩 분산 배치</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/kind-self-healing.png" alt="파드 삭제 직후 같은 이름의 파드가 새로 생성됨" loading="lazy" />
+        <figcaption>파드를 삭제하자 1초 만에 새 파드가 다시 생성 (자가 치유)</figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>6. 정리 및 한계</h2>
+      <ul>
+        <li><strong>환경 일관성</strong>: 설정을 이미지에 포함해 어느 노드에서 실행해도 같은 환경이 됩니다.</li>
+        <li><strong>자가 치유</strong>: 복제본 수를 선언해 두면 파드나 노드가 죽어도 Kubernetes가 개수를 맞춰 다시 띄웁니다.</li>
+        <li><strong>실습 범위</strong>: kind는 서버 한 대 안에서 동작하므로 물리 서버 장애까지 대비하지는 못합니다. 운영 환경에서는 control-plane 3대(etcd 쿼럼)와 API 서버 로드밸런서를 갖춘 실제 클러스터가 필요합니다.</li>
+        <li><strong>DB 데이터</strong>: DB를 여러 파드로 띄울 때는 StatefulSet과 영구 볼륨(PV), 복제 구성이 함께 필요합니다.</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer>
+    <p>황태운 · 시스템 인프라 운영 관리자</p>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,179 @@
+---
+title: Pacemaker + httpd 웹 서비스 HA 구성
+short_title: Pacemaker 웹 HA
+type: project
+anchor: pacemaker-ha
+order: 80
+featured: true
+summary: VIP 기반 Active/Standby 웹 서비스 자동 Failover
+problem: >-
+  웹 서버가 한 대라 장애가 나면 서비스가 중단되고, 다른 서버로 옮길 때 DNS나 IP를 수동으로 바꿔야 했습니다.
+action: >-
+  Rocky Linux 9 두 대에 Pacemaker + Corosync 클러스터를 구성하고, VIP와 httpd를 하나의 리소스 그룹으로 묶어
+  장애 시 Standby 노드로 자동 전환되게 했습니다.
+result: >-
+  클라이언트는 항상 같은 VIP로 접속하고, Active 노드 장애 시 수 초 안에 Standby 노드에서 서비스가 이어집니다.
+skill_group: 고가용성(HA) & 컨테이너
+skill_order: 20
+skill: Pacemaker + Corosync VIP 기반 웹 서비스 Failover
+link_label: Pacemaker HA 프로젝트
+---
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Pacemaker + httpd 웹 서비스 HA 구성 — 황태운</title>
+  <meta name="description" content="Rocky Linux 9에서 Pacemaker + Corosync로 VIP 기반 Active/Standby 웹 서비스 HA를 구성한 기록" />
+  <meta name="theme-color" content="#1a73e8" />
+  <link rel="stylesheet" href="../../assets/style.css" />
+  <style>
+    .table-wrap { overflow-x: auto; margin: 0.6rem 0 1rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+    th, td { border: 1px solid var(--border); padding: 0.5rem 0.7rem; text-align: left; vertical-align: top; }
+    th { background: var(--accent-soft); color: var(--accent); font-weight: 700; white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <main>
+    <a href="../../index.html" class="back-link">← 메인으로</a>
+
+    <header>
+      <p class="tagline">시스템 인프라 운영</p>
+      <h1>Pacemaker + httpd 웹 서비스 HA 구성</h1>
+      <p class="lead">Pacemaker와 Corosync로 2노드 Active/Standby 클러스터를 만들고, VIP와 httpd를 묶어 장애 시 자동으로 전환되도록 구성했습니다.</p>
+    </header>
+
+    <section>
+      <h2>1. 구성 개요</h2>
+      <div class="table-wrap">
+        <table>
+          <tbody>
+            <tr><th>OS</th><td>Rocky Linux 9</td></tr>
+            <tr><th>노드</th><td>node1 <code>10.0.0.11</code> / node2 <code>10.0.0.12</code></td></tr>
+            <tr><th>VIP</th><td><code>10.0.0.100/24</code></td></tr>
+            <tr><th>클러스터</th><td><code>web-cluster</code> (Active/Standby)</td></tr>
+            <tr><th>리소스 그룹</th><td><code>grp_web</code> = <code>res_vip</code> (IPaddr2) + <code>res_httpd</code> (systemd:httpd)</td></tr>
+          </tbody>
+        </table>
+      </div>
+<pre><code>클라이언트 ──▶ VIP 10.0.0.100
+                 │
+        ┌────────┴────────┐
+     node1 (Active)    node2 (Standby)
+     res_vip           ← 장애 시 이동
+     res_httpd         ← 장애 시 이동
+        └──── Corosync 하트비트 ────┘</code></pre>
+    </section>
+
+    <section>
+      <h2>2. 사전 준비 (양쪽 노드)</h2>
+<pre><code># 호스트 이름
+cat &gt;&gt; /etc/hosts &lt;&lt; 'EOF'
+10.0.0.11 node1
+10.0.0.12 node2
+EOF
+
+# HA 저장소 활성화 (Rocky 9 기본 비활성)
+dnf config-manager --set-enabled highavailability
+
+# 패키지 설치
+dnf install -y pacemaker corosync pcs fence-agents-all httpd
+
+# pcsd 시작
+systemctl enable --now pcsd
+
+# httpd는 Pacemaker가 제어하므로 systemd 자동 시작은 끔
+systemctl disable --now httpd
+
+# 클러스터 관리 계정 비밀번호 (양쪽 동일)
+passwd hacluster
+
+# 방화벽
+firewall-cmd --permanent --add-service=high-availability
+firewall-cmd --permanent --add-service=http
+firewall-cmd --reload</code></pre>
+    </section>
+
+    <section>
+      <h2>3. 클러스터 생성 (node1에서)</h2>
+<pre><code># 노드 인증
+pcs host auth node1 node2 -u hacluster
+
+# 클러스터 생성 및 시작
+pcs cluster setup web-cluster node1 node2 --start --enable
+
+# 실습 환경: 펜싱 장치가 없어 STONITH 비활성화
+pcs property set stonith-enabled=false
+
+pcs status</code></pre>
+    </section>
+
+    <section>
+      <h2>4. 리소스 구성</h2>
+<pre><code># VIP
+pcs resource create res_vip IPaddr2 ip=10.0.0.100 cidr_netmask=24 op monitor interval=10s
+
+# httpd
+pcs resource create res_httpd systemd:httpd op monitor interval=10s
+
+# 같은 노드에서 VIP → httpd 순서로 동작하도록 그룹화
+pcs resource group add grp_web res_vip res_httpd</code></pre>
+<pre><code>* Resource Group: grp_web:
+  * res_vip   (ocf:heartbeat:IPaddr2):  Started node1
+  * res_httpd (systemd:httpd):          Started node1</code></pre>
+    </section>
+
+    <section>
+      <h2>5. Failover 테스트</h2>
+<pre><code># 클라이언트: VIP 접속 확인
+curl http://10.0.0.100
+
+# node1을 Standby로 전환 (장애 시뮬레이션)
+pcs node standby node1
+pcs status
+#   * res_vip   → Started node2
+#   * res_httpd → Started node2
+
+# 클라이언트: 같은 VIP로 계속 접속되는지 확인
+curl http://10.0.0.100
+
+# node1 복구
+pcs node unstandby node1</code></pre>
+      <p>복구 후에도 리소스는 자동으로 node1로 돌아오지 않습니다(Auto Failback 없음). 원래 노드로 옮기려면 수동으로 이동합니다.</p>
+<pre><code>pcs resource move grp_web node1
+pcs resource clear grp_web   # 이동 시 생긴 위치 제약 제거</code></pre>
+    </section>
+
+    <section>
+      <h2>6. 트러블슈팅: pcs 설치 시 ruby 모듈 충돌</h2>
+      <ul>
+        <li><strong>증상</strong>: <code>dnf install pcs</code> 시 ruby 모듈 필터링으로 의존성 해결 실패</li>
+        <li><strong>조치</strong>: ruby 모듈 스트림을 초기화·비활성화한 뒤 <code>--nobest</code>로 설치</li>
+      </ul>
+<pre><code>dnf module reset ruby -y
+dnf module disable ruby -y
+dnf install -y python3-tornado python3-cryptography python3-pyparsing nss-tools
+dnf install -y pcs --nobest</code></pre>
+    </section>
+
+    <section>
+      <h2>7. 운영 명령어 및 주의사항</h2>
+<pre><code>pcs status                     # 전체 상태
+pcs config                     # 설정 확인
+pcs resource restart grp_web   # 리소스 재시작
+journalctl -u pacemaker -f     # Pacemaker 로그
+journalctl -u corosync -f      # Corosync 로그</code></pre>
+      <ul>
+        <li><strong>httpd 자동 시작 금지</strong>: systemd에서 httpd를 enable하면 부팅 시 양쪽 노드에서 동시에 뜰 수 있습니다. 시작·정지는 Pacemaker에만 맡깁니다.</li>
+        <li><strong>STONITH</strong>: 운영 환경에서는 반드시 펜싱 장치(IPMI, 하이퍼바이저 fence 등)를 구성해야 양쪽이 동시에 Active가 되는 split-brain을 막을 수 있습니다.</li>
+        <li><strong>콘텐츠 동기화</strong>: 두 노드의 웹 콘텐츠와 설정은 rsync나 공유 스토리지로 맞춰야 Failover 후에도 같은 화면이 나옵니다.</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer>
+    <p>황태운 · 시스템 인프라 운영 관리자</p>
+  </footer>
+</body>
+</html>

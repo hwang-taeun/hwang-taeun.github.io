@@ -1,0 +1,239 @@
+---
+title: MariaDB Galera Active-Active HA 구성
+short_title: MariaDB Galera HA
+type: project
+anchor: galera-ha
+order: 70
+featured: true
+summary: 2노드 Multi-Master DB 이중화와 장애 복구 절차 정립
+problem: >-
+  DB가 한 대뿐이라 서버 장애나 점검 시 서비스 전체가 멈추고, 수동 복구에 시간이 걸렸습니다.
+action: >-
+  MariaDB 10.11 + Galera 4로 양쪽 노드 모두 읽기·쓰기가 가능한 Active-Active 클러스터를 구성하고,
+  SELinux 포트 차단·<code>safe_to_bootstrap</code> 거부·한글 깨짐 등 구축 중 발생한 문제를 해결했습니다.
+result: >-
+  한 노드가 내려가도 남은 노드에서 서비스가 계속되고, 재부팅 시 기동 순서와 복구 절차를 문서로 표준화했습니다.
+skill_group: 고가용성(HA) & 컨테이너
+skill_order: 10
+skill: MariaDB Galera Cluster Active-Active DB 이중화
+link_label: Galera HA 프로젝트
+---
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MariaDB Galera Active-Active HA 구성 — 황태운</title>
+  <meta name="description" content="RHEL 9 / Rocky Linux 9 환경에서 MariaDB Galera Cluster로 Active-Active DB 이중화를 구성하고 트러블슈팅한 기록" />
+  <meta name="theme-color" content="#1a73e8" />
+  <link rel="stylesheet" href="../../assets/style.css" />
+  <style>
+    .table-wrap { overflow-x: auto; margin: 0.6rem 0 1rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+    th, td { border: 1px solid var(--border); padding: 0.5rem 0.7rem; text-align: left; vertical-align: top; }
+    th { background: var(--accent-soft); color: var(--accent); font-weight: 700; white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <main>
+    <a href="../../index.html" class="back-link">← 메인으로</a>
+
+    <header>
+      <p class="tagline">시스템 인프라 운영</p>
+      <h1>MariaDB Galera Active-Active HA 구성</h1>
+      <p class="lead">MariaDB Galera Cluster로 두 노드 모두 읽기·쓰기가 가능한 DB 이중화를 구성하고, 구축 과정에서 실제로 발생한 에러와 해결 방법을 정리했습니다.</p>
+    </header>
+
+    <section>
+      <h2>1. 구성 환경</h2>
+      <div class="table-wrap">
+        <table>
+          <tbody>
+            <tr><th>OS</th><td>RHEL 9 / Rocky Linux 9</td></tr>
+            <tr><th>DB</th><td>MariaDB 10.11 + Galera 4 (26.4)</td></tr>
+            <tr><th>노드</th><td>node1 <code>10.0.0.11</code> / node2 <code>10.0.0.12</code></td></tr>
+            <tr><th>SST 방식</th><td>rsync</td></tr>
+            <tr><th>포트</th><td>3306 (MariaDB), 4567 (Galera 복제), 4568 (IST), 4444 (SST)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Active-Active와 Active-Standby 비교</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>구분</th><th>Active-Active (Galera)</th><th>Active-Standby (복제)</th></tr></thead>
+          <tbody>
+            <tr><td>쓰기</td><td>모든 노드 가능</td><td>Primary만 가능</td></tr>
+            <tr><td>장애 시</td><td>남은 노드가 바로 처리</td><td>Standby를 Primary로 승격</td></tr>
+            <tr><td>AUTO_INCREMENT</td><td>노드별로 분리 (1,3,5 / 2,4,6)</td><td>순차 (1,2,3…)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>AUTO_INCREMENT 값이 띄엄띄엄 생기는 것은 노드 간 키 충돌을 막기 위한 정상 동작입니다.</p>
+    </section>
+
+    <section>
+      <h2>2. 사전 준비 (양쪽 노드)</h2>
+      <h3>방화벽</h3>
+<pre><code>firewall-cmd --permanent --add-port=3306/tcp            # MariaDB
+firewall-cmd --permanent --add-port=4567/tcp --add-port=4567/udp   # Galera 복제
+firewall-cmd --permanent --add-port=4568/tcp            # IST (증분 전송)
+firewall-cmd --permanent --add-port=4444/tcp            # SST (전체 동기화)
+firewall-cmd --reload</code></pre>
+
+      <h3>SELinux</h3>
+      <p>SELinux enforcing 상태에서는 SST에 쓰는 rsync가 4444 포트를 열지 못합니다. 포트에 rsync 라벨을 붙여 해결합니다.</p>
+<pre><code>semanage port -m -t rsync_port_t -p tcp 4444</code></pre>
+
+      <h3>패키지 설치</h3>
+<pre><code>cat &gt; /etc/yum.repos.d/mariadb.repo &lt;&lt; 'EOF'
+[mariadb]
+name = MariaDB
+baseurl = https://downloads.mariadb.com/MariaDB/mariadb-10.11/yum/rhel9-amd64
+gpgkey = https://downloads.mariadb.com/MariaDB/RPM-GPG-KEY-MariaDB
+gpgcheck = 1
+EOF
+
+dnf install -y MariaDB-server MariaDB-client galera-4</code></pre>
+    </section>
+
+    <section>
+      <h2>3. Galera 설정</h2>
+      <p><code>/etc/my.cnf.d/galera.cnf</code> — 양쪽 노드에 적용하고, <code>wsrep_node_address</code>와 <code>wsrep_node_name</code>만 노드별로 바꿉니다.</p>
+<pre><code>[mysqld]
+wsrep_on=ON
+wsrep_provider=/usr/lib64/galera-4/libgalera_smm.so
+
+# 클러스터 멤버와 이름 (양쪽 동일)
+wsrep_cluster_address=gcomm://10.0.0.11,10.0.0.12
+wsrep_cluster_name=my_galera_cluster
+
+# 현재 노드 (노드마다 다르게)
+wsrep_node_address=10.0.0.11
+wsrep_node_name=node1
+
+wsrep_sst_method=rsync
+
+# Galera 필수 InnoDB 설정
+binlog_format=ROW
+default_storage_engine=InnoDB
+innodb_autoinc_lock_mode=2</code></pre>
+
+      <h3>문자셋 (한글 지원)</h3>
+      <p>기본값이 <code>latin1</code>이라 한글 입력 시 <code>ERROR 1366 Incorrect string value</code>가 발생했습니다. <code>/etc/my.cnf.d/mariadb-server.cnf</code>에 utf8mb4를 지정합니다.</p>
+<pre><code>[mysqld]
+character-set-server = utf8mb4
+collation-server = utf8mb4_general_ci
+
+[client]
+default-character-set = utf8mb4</code></pre>
+    </section>
+
+    <section>
+      <h2>4. 클러스터 기동</h2>
+      <p>첫 노드는 <code>galera_new_cluster</code>로 클러스터를 새로 만들고, 나머지 노드는 일반 시작으로 합류시킵니다. 순서를 지키지 않으면 클러스터가 구성되지 않습니다.</p>
+<pre><code># node1: 클러스터 부트스트랩
+galera_new_cluster
+
+# node2: node1 정상 확인 후 합류
+systemctl start mariadb
+
+# 양쪽: 부팅 시 자동 시작
+systemctl enable mariadb</code></pre>
+
+      <h3>상태 확인</h3>
+<pre><code>mysql -e "SHOW STATUS WHERE Variable_name IN
+  ('wsrep_cluster_size','wsrep_cluster_status','wsrep_connected',
+   'wsrep_ready','wsrep_local_state_comment');"</code></pre>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>변수</th><th>정상값</th><th>의미</th></tr></thead>
+          <tbody>
+            <tr><td><code>wsrep_cluster_size</code></td><td>2</td><td>연결된 노드 수</td></tr>
+            <tr><td><code>wsrep_cluster_status</code></td><td>Primary</td><td>쿼리를 처리할 수 있는 주 클러스터</td></tr>
+            <tr><td><code>wsrep_connected</code> / <code>wsrep_ready</code></td><td>ON</td><td>연결 및 쿼리 처리 가능</td></tr>
+            <tr><td><code>wsrep_local_state_comment</code></td><td>Synced</td><td>동기화 완료</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>5. 동기화 테스트</h2>
+<pre><code>-- node1: 테이블 생성 및 입력
+CREATE DATABASE ha_test;
+USE ha_test;
+CREATE TABLE members (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(50) NOT NULL,
+  created_at DATETIME DEFAULT NOW()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+INSERT INTO members (name) VALUES ('홍길동'), ('김철수'), ('이영희');
+
+-- node2: 같은 데이터가 보이면 성공 (id 1, 3, 5)
+SELECT * FROM ha_test.members;
+
+-- node2에서 입력 → node1에서 조회되면 양방향 복제 성공
+INSERT INTO ha_test.members (name) VALUES ('박민수');</code></pre>
+      <p>한 쪽에서 입력하고 다른 쪽에서 <code>watch -n 1</code>으로 조회하면 실시간으로 반영되는 것을 확인할 수 있습니다.</p>
+    </section>
+
+    <section>
+      <h2>6. 트러블슈팅</h2>
+
+      <h3>rsync SST 포트 바인딩 실패</h3>
+<pre><code>rsyncd: bind() failed: Permission denied (address-family 2)
+rsyncd: unable to bind any inbound sockets on port 4444</code></pre>
+      <ul>
+        <li><strong>원인</strong>: SELinux가 rsync의 4444 포트 사용을 차단</li>
+        <li><strong>조치</strong>: <code>semanage port -m -t rsync_port_t -p tcp 4444</code> 후 MariaDB 재시작</li>
+      </ul>
+
+      <h3>부트스트랩 거부 (safe_to_bootstrap)</h3>
+<pre><code>WSREP: It may not be safe to bootstrap the cluster
+WSREP: wsrep::connect(gcomm://...) failed
+Aborting</code></pre>
+      <ul>
+        <li><strong>원인</strong>: 비정상 종료로 <code>grastate.dat</code>의 <code>safe_to_bootstrap</code>이 0으로 남음</li>
+        <li><strong>조치</strong>: 가장 최신 데이터를 가진 노드(<code>seqno</code>가 큰 노드)를 확인해 그 노드에서만 값을 1로 바꾸고 부트스트랩</li>
+      </ul>
+<pre><code># 각 노드의 마지막 커밋 위치 확인
+mysqld --wsrep-recover
+cat /var/lib/mysql/grastate.dat
+
+# seqno가 큰 노드에서만 실행
+cp /var/lib/mysql/grastate.dat /var/lib/mysql/grastate.dat.bak
+sed -i 's/safe_to_bootstrap: 0/safe_to_bootstrap: 1/' /var/lib/mysql/grastate.dat
+galera_new_cluster</code></pre>
+
+      <h3>node2가 클러스터에 연결되지 않음</h3>
+<pre><code>WSREP: Failed to establish connection: Connect (반복)</code></pre>
+      <ul>
+        <li><strong>원인</strong>: node1이 아직 부트스트랩되지 않은 상태에서 node2를 먼저 시작</li>
+        <li><strong>조치</strong>: node1을 <code>galera_new_cluster</code>로 먼저 기동한 뒤 node2 재시작</li>
+      </ul>
+
+      <h3>한글 입력 오류</h3>
+<pre><code>ERROR 1366 (22007): Incorrect string value: '\xED\x99\x8D...' for column `name`</code></pre>
+      <ul>
+        <li><strong>원인</strong>: 서버 기본 문자셋 <code>latin1</code></li>
+        <li><strong>조치</strong>: 설정 파일에 utf8mb4 지정, 이미 만든 DB·테이블은 <code>ALTER ... CONVERT TO CHARACTER SET utf8mb4</code>로 변환</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>7. 운영 시 주의사항</h2>
+      <ul>
+        <li><strong>재부팅 순서</strong>: 전체 재기동 시 <code>safe_to_bootstrap: 1</code>인 노드에서 <code>galera_new_cluster</code> → 클러스터 크기 1 확인 → 나머지 노드 시작 → 크기 2 확인 순서로 진행합니다.</li>
+        <li><strong>2노드의 한계</strong>: 노드가 2대뿐이면 네트워크가 끊겼을 때 어느 쪽도 과반을 얻지 못해 양쪽 모두 쓰기를 멈출 수 있습니다(split-brain 방지). 운영 환경에서는 3노드로 늘리거나 중재자 <code>garbd</code>를 추가합니다.</li>
+        <li><strong>접속 지점 단일화</strong>: 애플리케이션이 한 노드 IP에 고정되어 있으면 그 노드 장애 시 접속이 끊깁니다. HAProxy 또는 Keepalived VIP를 앞에 두어 완전한 HA를 구성합니다.</li>
+        <li><strong>로그</strong>: <code>journalctl -u mariadb -f | grep -E "WSREP|synced|joined|error"</code></li>
+      </ul>
+    </section>
+  </main>
+
+  <footer>
+    <p>황태운 · 시스템 인프라 운영 관리자</p>
+  </footer>
+</body>
+</html>

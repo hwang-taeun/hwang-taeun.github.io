@@ -1,0 +1,251 @@
+---
+title: 접근제어 환경의 CI/CD 배포 자동화 (Gitea + Polling Agent)
+short_title: CI/CD 배포 자동화
+type: project
+anchor: cicd-polling
+order: 100
+featured: true
+summary: SSH 직접 접속이 막힌 환경에서 Polling Agent로 다수 서버 일괄 작업
+problem: >-
+  운영 서버는 서버 접근제어를 거쳐야만 SSH 접속이 가능하고 80/443 통신만 열려 있어, Ansible·Jenkins처럼
+  서버로 직접 접속하는 배포 도구를 쓸 수 없었습니다.
+action: >-
+  CI/CD 서버에 Podman으로 Gitea와 Job API(httpd CGI)를 띄우고, 각 서버의 Polling Agent가 HTTP로 작업을 가져와
+  실행한 뒤 결과를 Gitea에 기록하는 Pull 방식 구조를 설계했습니다.
+result: >-
+  방화벽 정책을 바꾸지 않고 여러 서버에 같은 작업을 일괄 적용하고, 서버별 실행 로그를 Gitea 한 곳에서 확인할 수 있게 되었습니다.
+skill_group: 자동화 스크립트
+skill_order: 50
+skill: Gitea + Podman 기반 Pull 방식 CI/CD 배포 자동화
+link_label: CI/CD 프로젝트
+---
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>접근제어 환경의 CI/CD 배포 자동화 — 황태운</title>
+  <meta name="description" content="SSH 직접 접속이 불가능한 서버 접근제어 환경에서 Gitea + Podman + Polling Agent로 구성한 Pull 방식 CI/CD" />
+  <meta name="theme-color" content="#1a73e8" />
+  <link rel="stylesheet" href="../../assets/style.css" />
+  <style>
+    .table-wrap { overflow-x: auto; margin: 0.6rem 0 1rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+    th, td { border: 1px solid var(--border); padding: 0.5rem 0.7rem; text-align: left; vertical-align: top; }
+    th { background: var(--accent-soft); color: var(--accent); font-weight: 700; white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <main>
+    <a href="../../index.html" class="back-link">← 메인으로</a>
+
+    <header>
+      <p class="tagline">시스템 인프라 운영</p>
+      <h1>접근제어 환경의 CI/CD 배포 자동화</h1>
+      <p class="lead">서버로 직접 접속할 수 없는 환경에서, 서버가 CI/CD 서버로 작업을 가지러 오는 Pull 방식으로 다수 서버 일괄 작업을 자동화했습니다.</p>
+    </header>
+
+    <section>
+      <h2>1. 환경 제약</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>제약</th><th>내용</th></tr></thead>
+          <tbody>
+            <tr><td>SSH 직접 접속 불가</td><td>운영 서버는 서버 접근제어를 통해서만 SSH 접속 가능</td></tr>
+            <tr><td>방화벽</td><td>SSH(22)는 접근제어 IP만 허용, CI/CD 서버와는 80/443만 통신 가능</td></tr>
+            <tr><td>에이전트 설치 제한</td><td>Woodpecker Agent 같은 별도 데몬이나 HTTP API 설치 불가</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>CI/CD 서버가 운영 서버로 접속하는 Push 방식은 쓸 수 없으므로, <strong>운영 서버가 CI/CD 서버로 HTTP 요청을 보내는 Pull 방식</strong>을 선택했습니다. 운영 서버에는 bash, curl, git만 있으면 됩니다.</p>
+    </section>
+
+    <section>
+      <h2>2. 아키텍처</h2>
+<pre><code>[CI/CD 서버 (Master) 10.0.0.10]            [운영 서버 (Agent) 10.0.0.21 ...]
+  Podman                                      polling_agent.sh (cron 1분)
+  ├─ Gitea      :3000  (작업·로그 저장)              │
+  └─ Job API    :80    (httpd CGI)                   │
+        ◀──────────── 1) GET  /cgi-bin/get_jobs.sh ──┤
+                       2) 작업 실행                   │
+        ◀──────────── 3) POST /cgi-bin/post_result.sh┤
+  Gitea ◀──────────── 4) 실행 로그 push ─────────────┘
+                     (모두 80/443 아웃바운드 HTTP)</code></pre>
+    </section>
+
+    <section>
+      <h2>3. CI/CD 서버 구성</h2>
+      <h3>Gitea 컨테이너</h3>
+<pre><code>dnf install -y podman
+mkdir -p /opt/gitea/data
+chown -R 1000:1000 /opt/gitea/data
+
+podman run -d --name gitea --restart=always \
+  -p 3000:3000 -p 222:22 \
+  -v /opt/gitea/data:/data:Z \
+  -e GITEA__server__ROOT_URL=http://10.0.0.10:3000/ \
+  docker.io/gitea/gitea:latest</code></pre>
+      <p>웹 화면에서 관리자 계정을 만들고 로그 저장용 <code>cicd-logs</code> 저장소를 생성한 뒤, <strong>Settings → Applications</strong>에서 API 토큰을 발급합니다.</p>
+
+      <h3>Job API (httpd CGI)</h3>
+<pre><code>mkdir -p /opt/cicd/{jobs,results,logs,cgi-bin}
+
+# /opt/cicd/cgi-bin/get_jobs.sh : jobs 폴더의 JSON을 배열로 반환
+#!/bin/bash
+echo 'Content-Type: application/json'
+echo ''
+first=true
+echo '['
+for f in /opt/cicd/jobs/*.json; do
+    [ -f "$f" ] || continue
+    $first || echo ','
+    cat "$f"
+    first=false
+done
+echo ']'
+
+# /opt/cicd/cgi-bin/post_result.sh : Agent가 보낸 결과 저장
+#!/bin/bash
+echo 'Content-Type: application/json'
+echo ''
+read -r -n "$CONTENT_LENGTH" POST_DATA
+echo "$POST_DATA" &gt; "/opt/cicd/results/result_$(date +%Y%m%d_%H%M%S)_$$.json"
+echo '{"status":"ok"}'</code></pre>
+<pre><code>chmod +x /opt/cicd/cgi-bin/*.sh
+
+# 공식 httpd 이미지의 cgi-bin 경로에 스크립트를 연결
+podman run -d --name cicd-api --restart=always -p 80:80 \
+  -v /opt/cicd/cgi-bin:/usr/local/apache2/cgi-bin:Z \
+  -v /opt/cicd/jobs:/opt/cicd/jobs:Z \
+  -v /opt/cicd/results:/opt/cicd/results:Z \
+  docker.io/library/httpd:2.4
+
+# CGI 모듈 활성화 (event MPM은 cgid, prefork는 cgi)
+podman exec cicd-api sed -i \
+  -e 's/^\s*#\s*LoadModule cgid_module/LoadModule cgid_module/' \
+  -e 's/^\s*#\s*LoadModule cgi_module/LoadModule cgi_module/' \
+  /usr/local/apache2/conf/httpd.conf
+podman restart cicd-api</code></pre>
+
+      <h3>작업(Job) 정의</h3>
+<pre><code># /opt/cicd/jobs/job_001.json
+{
+  "job_id": "job_001",
+  "description": "hostname 출력 테스트",
+  "commands": [
+    "echo === CI/CD Job 실행 ===",
+    "hostname",
+    "date"
+  ]
+}</code></pre>
+    </section>
+
+    <section>
+      <h2>4. 운영 서버: Polling Agent</h2>
+      <p>1분마다 작업 목록을 가져와, 아직 실행하지 않은 작업만 실행하고 결과를 CI/CD 서버와 Gitea에 보냅니다.</p>
+<pre><code>#!/bin/bash
+# /opt/cicd/polling_agent.sh
+MASTER_URL="http://10.0.0.10"
+GITEA_URL="http://10.0.0.10:3000"
+GITEA_REPO="admin/cicd-logs"
+GITEA_TOKEN=$(&lt;/etc/cicd/gitea.token)     # 토큰은 별도 파일(600)로 분리
+STATE_DIR="/opt/cicd/state"
+LOG_DIR="/opt/cicd/agent_logs"
+HOST=$(hostname)
+mkdir -p "$STATE_DIR" "$LOG_DIR"
+
+JOBS=$(curl -s --max-time 10 "$MASTER_URL/cgi-bin/get_jobs.sh")
+[ -z "$JOBS" ] || [ "$JOBS" = "[]" ] &amp;&amp; exit 0
+
+# 작업 ID 목록
+for JOB_ID in $(echo "$JOBS" | python3 -c 'import sys,json; [print(j["job_id"]) for j in json.load(sys.stdin)]'); do
+    [ -f "$STATE_DIR/$JOB_ID.done" ] &amp;&amp; continue   # 이미 실행한 작업은 건너뜀
+
+    TS=$(date +%Y%m%d_%H%M%S)
+    LOG_FILE="$LOG_DIR/${JOB_ID}_${HOST}_${TS}.log"
+
+    # 해당 작업의 명령을 한 줄에 하나씩 꺼내 순서대로 실행
+    {
+        echo "[$(date)] Job 시작: $JOB_ID ($HOST)"
+        echo "$JOBS" | python3 -c '
+import sys, json
+jid = sys.argv[1]
+for j in json.load(sys.stdin):
+    if j["job_id"] == jid:
+        print("\n".join(j["commands"]))' "$JOB_ID" |
+        while IFS= read -r CMD; do
+            echo "[CMD] $CMD"
+            bash -c "$CMD" 2&gt;&amp;1
+        done
+        echo "[$(date)] Job 완료: $JOB_ID"
+    } &gt; "$LOG_FILE"
+
+    LOG_B64=$(base64 -w0 "$LOG_FILE")
+
+    # 결과를 CI/CD 서버로 전송
+    curl -s -X POST "$MASTER_URL/cgi-bin/post_result.sh" \
+        -H 'Content-Type: application/json' \
+        -d "{\"job_id\":\"$JOB_ID\",\"host\":\"$HOST\",\"log\":\"$LOG_B64\"}" &gt;/dev/null
+
+    # 실행 로그를 Gitea 저장소에 파일로 기록
+    curl -s -X POST "$GITEA_URL/api/v1/repos/$GITEA_REPO/contents/agent-logs/$(basename "$LOG_FILE")" \
+        -H "Authorization: token $GITEA_TOKEN" \
+        -H 'Content-Type: application/json' \
+        -d "{\"message\":\"Agent log: $JOB_ID from $HOST\",\"content\":\"$LOG_B64\"}" &gt;/dev/null
+
+    touch "$STATE_DIR/$JOB_ID.done"
+done</code></pre>
+<pre><code>chmod 700 /opt/cicd/polling_agent.sh
+
+# crontab -e (1분마다)
+* * * * * /opt/cicd/polling_agent.sh &gt;&gt; /opt/cicd/agent_logs/cron.log 2&gt;&amp;1</code></pre>
+    </section>
+
+    <section>
+      <h2>5. 테스트</h2>
+<pre><code># CI/CD 서버: API 응답 확인
+curl -s http://localhost/cgi-bin/get_jobs.sh
+# [{"job_id":"job_001", ...}]
+
+# 운영 서버: Agent 수동 실행 후 로그 확인
+bash /opt/cicd/polling_agent.sh
+grep -A1 '\[CMD\] hostname' /opt/cicd/agent_logs/*.log</code></pre>
+      <p>여러 서버에 Agent를 두고 같은 작업을 넣으면, Gitea <code>cicd-logs/agent-logs/</code>에 서버별 로그가 따로 쌓입니다.</p>
+<pre><code>agent-logs/
+├── job_test_web-server-01_20260504_120000.log
+├── job_test_web-server-02_20260504_120001.log
+└── job_test_db-server-01_20260504_120002.log</code></pre>
+    </section>
+
+    <section>
+      <h2>6. 트러블슈팅</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>증상</th><th>원인</th><th>조치</th></tr></thead>
+          <tbody>
+            <tr><td>Agent가 작업을 못 가져옴</td><td>아웃바운드 차단 또는 Master 다운</td><td><code>curl http://Master/</code>, <code>podman ps</code> 확인</td></tr>
+            <tr><td>Gitea push 실패</td><td>토큰 만료 또는 저장소 없음</td><td>토큰 재발급, 저장소 확인</td></tr>
+            <tr><td>같은 작업이 다시 실행됨</td><td>state 파일 삭제</td><td><code>/opt/cicd/state/</code> 확인</td></tr>
+            <tr><td>cron 미실행</td><td>crontab 미등록, crond 중지</td><td><code>crontab -l</code>, <code>systemctl status crond</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>7. 보안 고려사항 및 개선 방향</h2>
+      <p>Agent는 받아온 명령을 그대로 실행하므로, Job API를 조작할 수 있으면 모든 서버에서 명령이 실행될 수 있습니다. 운영 적용 시 다음을 함께 적용해야 합니다.</p>
+      <ul>
+        <li><strong>HTTPS</strong>: Job API와 Gitea를 HTTPS로 제공해 전송 중 변조를 막습니다.</li>
+        <li><strong>인증·서명</strong>: Job API에 토큰 인증을 두거나, 작업 파일에 서명을 붙여 Agent가 검증한 뒤 실행합니다.</li>
+        <li><strong>최소 권한</strong>: Agent를 root가 아닌 전용 계정으로 실행하고, 필요한 명령만 sudo로 허용합니다.</li>
+        <li><strong>작업 관리</strong>: 작업 파일을 Gitea 저장소(<code>cicd-jobs</code>)로 관리하면 누가 어떤 작업을 넣었는지 이력이 남습니다.</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer>
+    <p>황태운 · 시스템 인프라 운영 관리자</p>
+  </footer>
+</body>
+</html>
