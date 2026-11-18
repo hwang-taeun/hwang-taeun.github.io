@@ -1,0 +1,379 @@
+---
+title: 방화벽·IPS 정책 운영 — Palo Alto · SRX · Snort
+skill_group: 보안 점검·하드닝
+skill_order: 25
+skill: 방화벽(Palo Alto GUI · Juniper SRX CLI) 객체·차단 정책 등록과 로그 확인, IPS(Snort) 패턴 블럭·WEB-CGI 차단 규칙
+link_label: 방화벽·IPS 운영 상세
+---
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>방화벽·IPS 정책 운영 (Palo Alto · SRX · Snort) — 황태운</title>
+  <meta name="description" content="Palo Alto 방화벽 GUI와 Juniper SRX CLI에서 주소·서비스 객체 선언, 차단·허용 정책 등록과 순서 변경, commit·rollback, 차단 로그 확인. IPS는 Snort로 패턴 블럭·WEB-CGI·임계치 차단 규칙과 로그 확인" />
+  <meta name="theme-color" content="#1a73e8" />
+  <link rel="stylesheet" href="../../assets/style.css" />
+  <style>
+    .table-wrap { overflow-x: auto; margin: 0.6rem 0 1rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+    th, td { border: 1px solid var(--border); padding: 0.5rem 0.7rem; text-align: left; vertical-align: top; }
+    th { background: var(--accent-soft); color: var(--accent); font-weight: 700; white-space: nowrap; }
+    .note { border-left: 4px solid var(--accent); background: var(--accent-soft); padding: 0.7rem 1rem; border-radius: 0 8px 8px 0; margin: 0.8rem 0; }
+    .warn { border-left: 4px solid #d93025; background: rgba(217,48,37,0.08); padding: 0.7rem 1rem; border-radius: 0 8px 8px 0; margin: 0.8rem 0; }
+    .screenshot { margin: 0.8rem 0 1.2rem; }
+    .screenshot img { display: block; max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 8px; }
+    .screenshot figcaption { margin-top: 0.4rem; color: var(--muted); font-size: 0.88rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <a href="../../index.html" class="back-link">← 메인으로</a>
+
+    <header>
+      <p class="tagline">보안 점검·하드닝</p>
+      <h1>방화벽·IPS 정책 운영 — Palo Alto · SRX · Snort</h1>
+      <p class="lead">이전 회사에서 방화벽(Palo Alto, Juniper SRX)과 IPS(WINS Sniper)를 운영하며 차단·허용 정책 등록과 차단 로그 확인을 맡았습니다. IPS 장비는 공개 자료가 거의 없어서, 같은 개념(패턴 블럭, WEB-CGI, 임계치 차단)을 공개 IPS인 <strong>Snort</strong>로 옮겨 정리했습니다.</p>
+      <p class="note">장비 이름·IP·정책 이름·티켓 번호는 예시이며 화면도 예시입니다. 메뉴 이름은 장비 OS 버전에 따라 조금 다를 수 있습니다.</p>
+    </header>
+
+    <section>
+      <h2>1. 구성과 역할</h2>
+      <figure class="screenshot">
+        <img src="images/00-architecture.png" alt="인터넷 → 방화벽(Palo Alto·SRX) → 인라인 IPS(Snort) → DMZ 웹서버와 내부망, 방화벽은 IP·포트, IPS 는 패킷 내용 검사" loading="lazy" />
+        <figcaption>방화벽은 출발지·목적지·포트로, IPS는 허용된 통신의 내용을 보고 차단</figcaption>
+      </figure>
+      <h3>정책 작업 공통 순서</h3>
+      <ol>
+        <li><strong>요청 확인</strong>: 차단·허용 대상 IP, 포트, 기간, 요청 근거(티켓·공문)</li>
+        <li><strong>객체 선언</strong>: IP 주소, 주소 그룹, 서비스(포트) — 정책에 IP를 직접 쓰지 않고 이름 있는 객체로</li>
+        <li><strong>정책 등록</strong>: 차단 정책은 허용 정책보다 <strong>위</strong>에 (위에서부터 처음 맞는 정책 적용)</li>
+        <li><strong>변경 내용 확인 → 검사 → 적용</strong> (Palo Alto: Preview/Validate → Commit, SRX: show | compare → commit check → commit confirmed)</li>
+        <li><strong>로그로 확인</strong>: 의도한 통신이 차단·허용되는지, 엉뚱한 통신이 막히지 않는지</li>
+        <li><strong>기록</strong>: 설명(Description)과 커밋 메모에 티켓 번호를 남겨 나중에 정리할 때 근거로 사용</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>2. Palo Alto — 객체 선언 (GUI)</h2>
+      <h3>IP 주소 객체: Objects → Addresses → Add</h3>
+      <figure class="screenshot">
+        <img src="images/pa-01-address.png" alt="Palo Alto Objects Addresses 에서 BAD-IP-203.0.113.50 주소 객체 추가, Type IP Netmask 203.0.113.50/32" loading="lazy" />
+        <figcaption>이름에 용도가 드러나게, 설명에 사유·날짜, 태그로 분류 (예시 화면)</figcaption>
+      </figure>
+      <ul>
+        <li><strong>Type</strong>: IP Netmask(단일 IP·대역), IP Range(시작~끝), FQDN(도메인 이름)</li>
+        <li>차단 IP는 <strong>Objects → Address Groups</strong>에서 <code>BLOCK-LIST</code> 같은 그룹에 넣어 둡니다. 이후로는 정책을 고치지 않고 <strong>그룹에 주소만 추가</strong>하면 됩니다.</li>
+      </ul>
+      <h3>서비스(포트) 객체: Objects → Services → Add</h3>
+      <figure class="screenshot">
+        <img src="images/pa-02-service.png" alt="Palo Alto Objects Services 에서 TCP-8080 서비스 추가, 프로토콜 TCP, 목적지 포트 8080" loading="lazy" />
+        <figcaption>프로토콜과 목적지 포트만 지정 (출발지 포트는 보통 비움) (예시 화면)</figcaption>
+      </figure>
+      <div class="note">Palo Alto는 포트 대신 <strong>애플리케이션</strong>(ssh, web-browsing, mysql 등)으로 정책을 만들 수 있습니다. 서비스를 <code>application-default</code>로 두면 그 애플리케이션의 표준 포트에서만 허용되어, 다른 포트로 우회하는 통신을 막을 수 있습니다.</div>
+    </section>
+
+    <section>
+      <h2>3. Palo Alto — 차단 정책 등록과 순서</h2>
+      <p><strong>Policies → Security → Add</strong>. 기존 규칙을 선택한 채로 Add 하면 그 아래에 생기므로, 만든 뒤 <strong>Move → Move Top</strong>(또는 Move Up)으로 허용 규칙 위로 올립니다.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>탭</th><th>차단 규칙 예</th></tr></thead>
+          <tbody>
+            <tr><td>General</td><td>Name <code>Block-Bad-IP</code>, Description 사유·티켓 번호</td></tr>
+            <tr><td>Source</td><td>Zone <code>untrust</code>, Address <code>BLOCK-LIST</code></td></tr>
+            <tr><td>Destination</td><td>Zone <code>any</code>, Address <code>any</code></td></tr>
+            <tr><td>Application / Service</td><td><code>any</code> / <code>any</code></td></tr>
+            <tr><td>Actions</td><td>Action <strong>Deny</strong>, <strong>Log at Session End</strong> 체크, Log Forwarding(SIEM·syslog 전송)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <figure class="screenshot">
+        <img src="images/pa-04-policy-edit.png" alt="Palo Alto Security Policy Rule Actions 탭: Action Deny, Log at Session End, Log Forwarding, 다른 탭 값 요약" loading="lazy" />
+        <figcaption>Actions 탭: Deny + 로그 기록 (예시 화면)</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/pa-03-policy-list.png" alt="Palo Alto Security 정책 목록: 1번 Block-Bad-IP Deny 가 허용 규칙들보다 위, 맨 아래 intrazone·interzone 기본 규칙" loading="lazy" />
+        <figcaption>차단 규칙을 맨 위로. 맨 아래 두 줄은 기본 규칙 (예시 화면)</figcaption>
+      </figure>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Action</th><th>동작</th><th>사용</th></tr></thead>
+          <tbody>
+            <tr><td>Deny</td><td>애플리케이션별 기본 거부 동작</td><td>일반 차단</td></tr>
+            <tr><td>Drop</td><td>응답 없이 버림</td><td>외부 스캔·공격 IP (응답을 주지 않음)</td></tr>
+            <tr><td>Reset (client/server/both)</td><td>RST를 보내 즉시 끊음</td><td>내부 사용자 차단 (대기 시간 없이 실패를 알림)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="warn"><strong>기본 규칙의 로그</strong>: 맨 아래 <code>interzone-default</code>(다른 존 간 기본 거부)는 기본으로 <strong>로그를 남기지 않습니다.</strong> 선택 후 <strong>Override</strong> → Actions에서 Log at Session End를 켜 두면 "아무 규칙에도 맞지 않아 막힌 통신"도 로그로 확인할 수 있습니다.</div>
+    </section>
+
+    <section>
+      <h2>4. Palo Alto — Commit과 되돌리기</h2>
+      <p>GUI에서 바꾼 내용은 <strong>후보 설정</strong>에만 저장되고, 오른쪽 위 <strong>Commit</strong>을 눌러야 장비에 적용됩니다.</p>
+      <ol>
+        <li><strong>Preview Changes</strong>: 현재 적용된 설정과 바뀐 줄 비교</li>
+        <li><strong>Validate Commit</strong>: 적용하지 않고 오류만 검사</li>
+        <li><strong>Description</strong>에 사유·티켓 번호 → <strong>Commit</strong></li>
+      </ol>
+      <figure class="screenshot">
+        <img src="images/pa-05-commit.png" alt="Palo Alto Commit 대화상자: 변경 범위 목록, 설명 입력, Preview Changes·Validate Commit" loading="lazy" />
+        <figcaption>바뀐 객체·규칙 목록 확인 → 미리 보기·검사 → 설명과 함께 Commit (예시 화면)</figcaption>
+      </figure>
+<pre><code># 되돌리기 (GUI)
+Config(오른쪽 위) → Revert Changes                  # 아직 Commit 하지 않은 변경 취소
+Device → Setup → Operations → Load configuration version → 이전 버전 선택 → Commit
+
+# 같은 작업 (CLI)
+# load config version 15                                # 15번 버전을 후보로 불러오기
+# commit</code></pre>
+    </section>
+
+    <section>
+      <h2>5. Palo Alto — 차단 로그 확인 (GUI)</h2>
+      <p><strong>Monitor → Logs → Traffic</strong>에서 필터를 입력합니다. 표의 주소·포트·규칙 셀을 클릭하면 필터에 자동으로 추가됩니다.</p>
+      <figure class="screenshot">
+        <img src="images/pa-06-traffic-log.png" alt="Palo Alto Monitor Traffic 로그에 addr.src in 203.0.113.50 and action eq deny 필터, Block-Bad-IP 규칙으로 차단된 기록" loading="lazy" />
+        <figcaption>출발지 + 차단 필터 → 어떤 규칙에 걸렸는지(RULE) 확인 (예시 화면)</figcaption>
+      </figure>
+<pre><code>( addr.src in 203.0.113.50 ) and ( action eq deny )      # 특정 IP 의 차단 기록
+( rule eq 'Block-Bad-IP' )                                # 특정 규칙에 걸린 통신
+( port.dst eq 22 ) and ( action eq deny )                 # SSH 차단 기록
+( zone.src eq untrust ) and ( receive_time geq '2026/11/18 00:00:00' )</code></pre>
+      <ul>
+        <li>허용됐어야 하는 통신이 막혔다면 RULE 열에서 <strong>어느 규칙에 걸렸는지</strong> 보고 규칙 순서를 확인합니다.</li>
+        <li>IPS·안티바이러스 등 보안 프로필로 막힌 것은 <strong>Monitor → Logs → Threat</strong>에 남습니다.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>6. Juniper SRX — 객체 선언 (CLI)</h2>
+<pre><code>admin@srx01&gt; configure
+
+# IP 주소 객체 (global address-book: 모든 존에서 사용)
+set security address-book global address BAD-IP-203.0.113.50 203.0.113.50/32
+set security address-book global address SRV-WEB01 10.10.0.21/32
+set security address-book global address NET-ADMIN 10.10.9.0/24
+
+# 주소 그룹 — 차단 IP 는 여기에만 추가
+set security address-book global address-set BLOCK-LIST address BAD-IP-203.0.113.50
+
+# 포트 객체 (기본 제공: junos-http, junos-https, junos-ssh, junos-mysql ...)
+set applications application TCP-8080 protocol tcp destination-port 8080
+set applications application-set APP-WEB application junos-http
+set applications application-set APP-WEB application junos-https
+set applications application-set APP-WEB application TCP-8080
+
+# 확인
+show security address-book global | display set
+show applications | display set</code></pre>
+      <figure class="screenshot">
+        <img src="images/srx-01-objects.png" alt="SRX 설정 모드에서 address-book 주소·주소 그룹, applications 포트 객체와 application-set 선언" loading="lazy" />
+        <figcaption>주소 → 주소 그룹 → 포트 객체 → 포트 묶음 (예시 화면)</figcaption>
+      </figure>
+      <div class="note">오래된 Junos나 기존 설정이 존별 주소록(<code>set security zones security-zone untrust address-book address ...</code>)을 쓰고 있다면 같은 방식을 따라야 합니다. 한 장비에서 global과 존별 주소록을 섞어 쓸 수 없습니다.</div>
+    </section>
+
+    <section>
+      <h2>7. Juniper SRX — 차단·허용 정책과 insert</h2>
+<pre><code># 허용 정책 (기존)
+set security policies from-zone untrust to-zone dmz policy ALLOW-WEB match source-address any destination-address SRV-WEB01 application APP-WEB
+set security policies from-zone untrust to-zone dmz policy ALLOW-WEB then permit
+set security policies from-zone untrust to-zone dmz policy ALLOW-WEB then log session-close
+
+# 차단 정책 — set 으로 새로 만들면 해당 존 쌍의 "맨 아래" 에 붙음
+set security policies from-zone untrust to-zone dmz policy DENY-BAD-IP match source-address BLOCK-LIST destination-address any application any
+set security policies from-zone untrust to-zone dmz policy DENY-BAD-IP then deny
+set security policies from-zone untrust to-zone dmz policy DENY-BAD-IP then log session-init
+
+# 순서 변경 — 차단 정책을 허용 정책 위로
+insert security policies from-zone untrust to-zone dmz policy DENY-BAD-IP before policy ALLOW-WEB
+
+# 확인 (나열 순서 = 적용 순서)
+show security policies from-zone untrust to-zone dmz | display set</code></pre>
+      <figure class="screenshot">
+        <img src="images/srx-02-policy-insert.png" alt="SRX 허용 정책과 차단 정책 set 명령, insert 로 DENY-BAD-IP 를 ALLOW-WEB 앞으로 이동 후 순서 확인" loading="lazy" />
+        <figcaption>새 정책은 맨 아래에 생기므로 insert ... before 로 위치 지정 (예시 화면)</figcaption>
+      </figure>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>then</th><th>동작</th></tr></thead>
+          <tbody>
+            <tr><td><code>permit</code></td><td>허용</td></tr>
+            <tr><td><code>deny</code></td><td>조용히 버림</td></tr>
+            <tr><td><code>reject</code></td><td>TCP RST / ICMP unreachable 응답 후 거부</td></tr>
+            <tr><td><code>log session-init</code></td><td>세션 시작 시 로그 (차단 정책은 이것만 남음)</td></tr>
+            <tr><td><code>log session-close</code></td><td>세션 종료 시 로그 (허용 정책: 전송량·시간 포함)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>정책을 지우지 않고 잠시 끌 때는 <code>deactivate security policies from-zone untrust to-zone dmz policy DENY-BAD-IP</code>, 다시 켤 때는 <code>activate</code>.</p>
+    </section>
+
+    <section>
+      <h2>8. Juniper SRX — commit check · commit confirmed · rollback</h2>
+<pre><code># 1) 바뀐 내용 확인
+show | compare
+
+# 2) 적용 없이 문법·참조 검사 (없는 객체 이름 등)
+commit check
+
+# 3) 원격 작업이면 자동 되돌림 예약 — 5분 안에 commit 을 다시 안 하면 이전 설정으로 복구
+commit confirmed 5 comment "BLOCK 203.0.113.50 #2611-018"
+
+# 4) 관리 접속·서비스가 정상이면 확정
+commit
+
+# 되돌리기 — rollback N 은 N번째 이전 커밋을 "후보 설정" 으로 불러올 뿐, commit 해야 적용
+rollback 1
+show | compare
+commit
+
+# 커밋 이력과 특정 버전 비교
+run show system commit
+show | compare rollback 2</code></pre>
+      <figure class="screenshot">
+        <img src="images/srx-03-commit.png" alt="SRX show compare 로 변경 확인, commit check 성공, commit confirmed 5 후 commit 으로 확정, rollback 1 과 커밋 이력" loading="lazy" />
+        <figcaption>확인 → 검사 → 자동 되돌림 예약 커밋 → 확정, 필요 시 rollback (예시 화면)</figcaption>
+      </figure>
+      <div class="warn"><strong>commit confirmed를 쓴 이유</strong>: 원격에서 정책을 잘못 넣어 관리 접속까지 막히면 장비 앞까지 가야 합니다. <code>commit confirmed</code>로 적용하면 접속이 끊겨 확정 <code>commit</code>을 못 해도 지정 시간 뒤 자동으로 원래 설정으로 돌아옵니다.</div>
+    </section>
+
+    <section>
+      <h2>9. Juniper SRX — 차단 로그 확인</h2>
+<pre><code># 세션 거부 로그만 로컬 파일로 남기기 (차단 정책에 then log session-init 필요)
+set system syslog file traffic-log any any
+set system syslog file traffic-log match RT_FLOW_SESSION_DENY
+commit and-quit
+
+# 확인
+show log traffic-log | match 203.0.113.50 | last 20
+monitor start traffic-log            # 실시간 (중지: monitor stop)
+
+# 정책별 적중 횟수 — 차단 정책이 실제로 동작하는지, 쓰이지 않는 정책이 무엇인지
+show security policies hit-count from-zone untrust to-zone dmz</code></pre>
+      <figure class="screenshot">
+        <img src="images/srx-04-log.png" alt="SRX RT_FLOW_SESSION_DENY 로그에서 203.0.113.50 이 DENY-BAD-IP 정책으로 차단된 기록, 정책별 hit-count" loading="lazy" />
+        <figcaption>RT_FLOW_SESSION_DENY: 출발지/목적지·포트·걸린 정책 이름 / 정책별 적중 수 (예시 화면)</figcaption>
+      </figure>
+      <p>장기 보관·검색은 장비에 쌓지 않고 <a href="../../projects/log-server/index.html">중앙 로그 서버</a>(syslog)나 SIEM으로 보냅니다.</p>
+    </section>
+
+    <section>
+      <h2>10. IPS — Snort로 보는 패턴 블럭 · WEB-CGI</h2>
+      <p>WINS Sniper 같은 상용 IPS의 정책 화면에서 쓰던 <strong>패턴 블럭</strong>, <strong>WEB-CGI</strong> 같은 분류는 Snort에서도 같은 개념으로 만들 수 있습니다. 방화벽이 "어디서 어디로 몇 번 포트"를 본다면, IPS는 <strong>허용된 통신 안의 내용</strong>을 봅니다.</p>
+      <h3>패턴 블럭과 WEB-CGI의 차이</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th></th><th>패턴 블럭</th><th>WEB-CGI</th></tr></thead>
+          <tbody>
+            <tr><td>무엇인가</td><td>운영자가 <strong>직접 정한 문자열</strong>이 패킷에 보이면 차단하는 사용자 정의 규칙</td><td>제조사·룰셋이 제공하는 <strong>웹 CGI 취약점 공격 시그니처 분류</strong> (예전 Snort 룰셋의 <code>web-cgi.rules</code>, 지금은 <code>SERVER-WEBAPP</code> 계열로 정리)</td></tr>
+            <tr><td>검사 위치</td><td>프로토콜 해석 없이 <strong>패킷 내용 전체</strong>에서 문자열 검색</td><td>HTTP를 해석해 <strong>URI·헤더 등 정해진 위치</strong>에서, URL 인코딩을 푼(정규화한) 뒤 검사</td></tr>
+            <tr><td>만드는 사람</td><td>운영자 (긴급 대응: 새 공격 문자열, 특정 악성 도메인·파일명)</td><td>제조사·룰셋 (업데이트로 추가, 운영자는 켜기/끄기·예외 처리)</td></tr>
+            <tr><td>장점</td><td>새 공격에 바로 대응, 어떤 프로토콜에도 적용</td><td>오탐이 적고, <code>%2e%2e</code>처럼 인코딩해 우회하는 공격도 잡음</td></tr>
+            <tr><td>주의</td><td>짧거나 흔한 문자열이면 정상 통신도 막힘(오탐), 인코딩 우회에 약함</td><td>새 취약점은 업데이트 전까지 못 잡음, 서비스와 무관한 시그니처는 꺼서 성능 확보</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h3>Snort 규칙 예</h3>
+<pre><code># /usr/local/etc/rules/local.rules
+
+# (1) 패턴 블럭: 웹 포트로 들어오는 요청에 "cmd.exe" 가 보이면 차단
+drop tcp $EXTERNAL_NET any -&gt; $HOME_NET [80,8080] (msg:"PATTERN-BLOCK cmd.exe 문자열";
+     flow:to_server,established; content:"cmd.exe",nocase; sid:1000101; rev:1;)
+
+# (2) WEB-CGI: HTTP URI 를 해석한 뒤 CGI 취약 경로 요청 차단
+drop http (msg:"WEB-CGI phf access"; flow:to_server,established;
+     http_uri; content:"/cgi-bin/phf",nocase; classtype:web-application-attack; sid:1000201; rev:1;)
+
+# (3) 임계치: 60초 안에 같은 출발지에서 SSH 연결 시도 5회 넘으면 차단
+drop tcp $EXTERNAL_NET any -&gt; $HOME_NET 22 (msg:"SSH brute force"; flow:to_server; flags:S;
+     detection_filter:track by_src, count 5, seconds 60; sid:1000301; rev:1;)
+
+# (4) 탐지만: 새 규칙은 alert 로 며칠 지켜본 뒤 오탐이 없으면 drop 으로
+alert http (msg:"WEB-CGI test-cgi probe"; http_uri; content:"/cgi-bin/test-cgi"; sid:1000202; rev:1;)</code></pre>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>요소</th><th>의미</th></tr></thead>
+          <tbody>
+            <tr><td><code>drop</code> / <code>alert</code> / <code>reject</code></td><td>차단 / 탐지만 / 차단 + RST 응답. <strong>drop은 인라인(IPS) 모드에서만 실제로 차단</strong>되고, 미러링(IDS) 모드에서는 로그만 남음</td></tr>
+            <tr><td><code>flow:to_server,established</code></td><td>연결이 맺어진 뒤 클라이언트 → 서버 방향만 (오탐·부하 감소)</td></tr>
+            <tr><td><code>content:"...",nocase</code></td><td>찾을 문자열, 대소문자 무시</td></tr>
+            <tr><td><code>http_uri;</code></td><td>이후 content를 HTTP URI(정규화된 값)에서만 찾음</td></tr>
+            <tr><td><code>detection_filter</code></td><td>출발지별 횟수 기준을 넘은 뒤부터 동작</td></tr>
+            <tr><td><code>sid</code> / <code>rev</code></td><td>규칙 번호(사용자 규칙은 1000000 이상) / 수정 차수</td></tr>
+          </tbody>
+        </table>
+      </div>
+<pre><code># 문법 검사
+snort -c /usr/local/etc/snort/snort.lua -R /usr/local/etc/rules/local.rules -T</code></pre>
+      <figure class="screenshot">
+        <img src="images/ips-01-rules.png" alt="Snort local.rules 에 패턴 블럭, WEB-CGI, 임계치, 탐지 전용 규칙과 설정 검사 성공" loading="lazy" />
+        <figcaption>패턴 블럭 · WEB-CGI · 임계치 · 탐지 전용 규칙, 적용 전 문법 검사 (예시 화면)</figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>11. IPS — 인라인 차단과 로그 확인</h2>
+<pre><code># snort.lua — 인라인(IPS) 모드
+ips = { mode = inline, variables = default_variables, include = RULE_PATH .. '/local.rules' }
+
+# eth1 ↔ eth2 사이에 끼워 실행 (브리지처럼 통과시키며 검사)
+snort -c /usr/local/etc/snort/snort.lua -Q --daq afpacket -i eth1:eth2 \
+      -A alert_fast -l /var/log/snort -D
+
+# 차단 로그
+tail -f /var/log/snort/alert_fast.txt
+grep '\[Drop\]' /var/log/snort/alert_fast.txt | grep 203.0.113.77
+
+# 규칙별 건수
+grep -o '\[1:[0-9]*:[0-9]*\] "[^"]*"' /var/log/snort/alert_fast.txt | sort | uniq -c | sort -rn</code></pre>
+      <figure class="screenshot">
+        <img src="images/ips-02-alert-log.png" alt="Snort 인라인 모드 설정과 실행, alert_fast 로그에 Drop 으로 표시된 WEB-CGI·패턴 블럭·SSH 대입 차단, 규칙별 건수" loading="lazy" />
+        <figcaption>[Drop] = 차단, [**]만 있으면 탐지만. 로그의 sid로 어떤 규칙인지 확인 (예시 화면)</figcaption>
+      </figure>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>상용 IPS 화면에서 하던 일</th><th>Snort에서는</th></tr></thead>
+          <tbody>
+            <tr><td>탐지 모드 / 차단 모드 전환</td><td><code>ips.mode</code> = <code>tap</code>(탐지) / <code>inline</code>(차단), 규칙별 <code>alert</code> / <code>drop</code></td></tr>
+            <tr><td>사용자 정의 패턴 등록</td><td><code>local.rules</code>에 <code>content</code>·<code>pcre</code> 규칙 추가</td></tr>
+            <tr><td>시그니처 업데이트</td><td>룰셋(커뮤니티·구독) 내려받아 교체 (PulledPork 등)</td></tr>
+            <tr><td>예외 IP 등록</td><td><code>suppress</code> 설정 또는 규칙의 출발지에서 제외(<code>!</code>)</td></tr>
+            <tr><td>차단 IP 목록</td><td><code>reputation</code> 검사기의 blocklist 파일</td></tr>
+            <tr><td>탐지·차단 로그 조회</td><td><code>alert_fast</code>·<code>alert_json</code> 출력 → 로그 서버·SIEM으로 수집해 검색</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="warn"><strong>인라인 IPS의 위험</strong>: IPS가 멈추면 그 구간 통신이 모두 끊깁니다. 상용 장비는 장애 시 통과시키는 바이패스 기능을 쓰고, Snort를 인라인으로 둘 때도 바이패스 NIC나 이중화를 함께 고려합니다. 새 규칙은 반드시 탐지 모드로 먼저 확인합니다.</div>
+    </section>
+
+    <section>
+      <h2>12. 트러블슈팅</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>장비</th><th>증상</th><th>원인 및 해결</th></tr></thead>
+          <tbody>
+            <tr><td rowspan="3">공통</td><td>차단 정책을 넣었는데 계속 통신됨</td><td>위쪽 허용 정책에 먼저 걸림 → 차단 정책 순서를 위로. 로그의 규칙 이름으로 확인</td></tr>
+            <tr><td>차단 후 다른 서비스까지 막힘</td><td>주소 객체를 너무 넓게(대역) 입력, 또는 목적지·서비스를 any로 둔 영향 범위 확인 부족</td></tr>
+            <tr><td>NAT 뒤 서버인데 정책이 안 맞음</td><td>정책의 목적지는 장비 기준(Palo Alto: NAT 전 주소 + NAT 후 존, SRX: NAT 후 주소) 확인</td></tr>
+            <tr><td rowspan="2">Palo Alto</td><td>Commit 실패 "is not a valid reference"</td><td>삭제·이름 변경된 객체를 정책이 참조 → Validate Commit으로 확인 후 수정</td></tr>
+            <tr><td>차단 로그가 안 보임</td><td>규칙의 Log at Session End 해제, 기본 interzone 규칙은 기본으로 로그 없음 → Override</td></tr>
+            <tr><td rowspan="3">SRX</td><td><code>commit check</code> 오류 "address ... not found"</td><td>주소록 종류 불일치(global ↔ 존별) 또는 오타</td></tr>
+            <tr><td>원격 작업 중 접속이 끊김</td><td><code>commit confirmed</code>로 적용했으면 지정 시간 뒤 자동 복구, 아니면 콘솔에서 <code>rollback 1</code> → <code>commit</code></td></tr>
+            <tr><td>로그가 안 쌓임</td><td>정책에 <code>then log session-init</code> 누락, syslog file 설정의 match 문자열 확인</td></tr>
+            <tr><td rowspan="3">Snort</td><td>drop 규칙인데 차단 안 됨</td><td>IDS(미러링·tap) 모드로 동작 중 → <code>-Q</code>와 <code>ips.mode = inline</code> 확인</td></tr>
+            <tr><td>정상 사이트가 막힘</td><td>패턴 블럭 문자열이 너무 짧거나 흔함 → <code>http_uri</code> 등 위치 지정, 더 구체적인 문자열, 먼저 alert로 검증</td></tr>
+            <tr><td>인코딩한 공격이 통과</td><td>raw content 규칙은 URL 인코딩을 풀지 않음 → <code>http_uri</code> 같은 HTTP 버퍼 사용</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>황태운 · 시스템 인프라 운영 관리자</p>
+  </footer>
+</body>
+</html>
