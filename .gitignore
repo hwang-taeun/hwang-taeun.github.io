@@ -1,0 +1,18 @@
+# ── 개인 파일 (공개 저장소에 올리지 않음) ──
+# 비공개 이력서 (연락처·자기소개서 포함)
+황태운_*
+
+# 백업·작업용
+old/
+*.zip
+
+# ── Jekyll 로컬 미리보기 산출물 ──
+_site/
+.jekyll-cache/
+.jekyll-metadata
+.sass-cache/
+
+# ── 편집기·OS 자동 생성 파일 ──
+.vscode/
+Thumbs.db
+desktop.ini
