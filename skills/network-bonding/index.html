@@ -1,0 +1,286 @@
+---
+title: 네트워크 본딩 (bond0) 구성 — nmcli · nmtui
+skill_group: OS & 시스템 관리
+skill_order: 45
+skill: 네트워크 본딩(bond0) 구성 — nmcli·nmtui, active-backup·라운드로빈 비교, 스위치 이중화 대응
+link_label: 네트워크 본딩 구성 상세
+---
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>네트워크 본딩 (bond0) 구성 — 황태운</title>
+  <meta name="description" content="Rocky Linux 9에서 nmcli·nmtui로 bond0를 구성하고, active-backup과 라운드로빈 차이, 스위치 이중화 환경에서 라운드로빈 세션 끊김 원인과 해결, SSH 중 본딩 상태 실시간 확인 방법" />
+  <meta name="theme-color" content="#1a73e8" />
+  <link rel="stylesheet" href="../../assets/style.css" />
+  <style>
+    .table-wrap { overflow-x: auto; margin: 0.6rem 0 1rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+    th, td { border: 1px solid var(--border); padding: 0.5rem 0.7rem; text-align: left; vertical-align: top; }
+    th { background: var(--accent-soft); color: var(--accent); font-weight: 700; white-space: nowrap; }
+    .note { border-left: 4px solid var(--accent); background: var(--accent-soft); padding: 0.7rem 1rem; border-radius: 0 8px 8px 0; margin: 0.8rem 0; }
+    .screenshot { margin: 0.8rem 0 1.2rem; }
+    .screenshot img { display: block; max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 8px; }
+    .screenshot figcaption { margin-top: 0.4rem; color: var(--muted); font-size: 0.88rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <a href="../../index.html" class="back-link">← 메인으로</a>
+
+    <header>
+      <p class="tagline">OS &amp; 시스템 관리</p>
+      <h1>네트워크 본딩 (bond0) 구성 — nmcli · nmtui</h1>
+      <p class="lead">NIC 두 개를 bond0 하나로 묶어 한쪽 링크가 끊겨도 통신이 이어지도록 구성한 방법입니다. 라운드로빈 모드에서 겪은 세션 끊김의 원인과, 스위치 이중화 환경에서의 올바른 설정도 정리했습니다.</p>
+    </header>
+
+    <section>
+      <h2>1. 구성</h2>
+<pre><code>                 ┌──────────── bond0 (10.0.0.31/24) ────────────┐
+                 │                                               │
+               eno0 (primary)                               enp6s0f0 (backup)
+                 │                                               │
+             [ SW1 Gi1/0/10 ] ════ 스위치 간 연결(Po1) ════ [ SW2 Gi2/0/10 ]
+                 └───────────────── 게이트웨이 10.0.0.1 ──────────────┘</code></pre>
+      <div class="table-wrap">
+        <table>
+          <tbody>
+            <tr><th>OS</th><td>Rocky Linux 9 (NetworkManager)</td></tr>
+            <tr><th>본딩</th><td><code>bond0</code> — 포트 <code>eno0</code>, <code>enp6s0f0</code></td></tr>
+            <tr><th>모드</th><td><code>active-backup</code>, primary <code>eno0</code>, MII 감시 100ms</td></tr>
+            <tr><th>IP</th><td><code>10.0.0.31/24</code>, GW <code>10.0.0.1</code></td></tr>
+            <tr><th>스위치</th><td>두 NIC를 서로 다른 스위치(SW1, SW2)에 연결해 스위치 장애까지 대비</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>2. 모드 선택: active-backup vs 라운드로빈</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>모드</th><th>동작</th><th>스위치 설정</th></tr></thead>
+          <tbody>
+            <tr><td><code>0 balance-rr</code></td><td>패킷을 포트에 번갈아 전송</td><td>필요 (정적 EtherChannel)</td></tr>
+            <tr><td><code>1 active-backup</code></td><td>한 포트만 사용, 장애 시 다른 포트로 전환</td><td>불필요</td></tr>
+            <tr><td><code>2 balance-xor</code></td><td>해시로 포트 고정 분산</td><td>필요 (정적 EtherChannel)</td></tr>
+            <tr><td><code>4 802.3ad</code></td><td>LACP로 스위치와 협상해 흐름별 분산</td><td>필요 (LACP)</td></tr>
+            <tr><td><code>5 balance-tlb</code> / <code>6 balance-alb</code></td><td>송신(alb는 수신도) 분산</td><td>불필요</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th></th><th>active-backup (mode 1)</th><th>라운드로빈 (mode 0)</th></tr></thead>
+          <tbody>
+            <tr><td><strong>장점</strong></td><td>• 스위치 설정 없이 동작<br>• 서로 다른 스위치에 연결해도 안전<br>• 동작이 단순해 장애 분석이 쉬움</td><td>• 두 포트 대역폭을 합쳐 단일 흐름도 1Gbps 이상 가능<br>• 포트가 모두 사용됨</td></tr>
+            <tr><td><strong>단점</strong></td><td>• 한 포트는 대기만 함 (대역폭 = 1포트)</td><td>• 스위치가 포트를 하나로 묶어줘야 함<br>• 패킷 순서가 뒤바뀌어 TCP 재전송 증가<br>• 스위치가 따로 놀면 MAC 플래핑과 세션 끊김</td></tr>
+            <tr><td><strong>적합한 곳</strong></td><td>일반 서버, 스위치 이중화 환경</td><td>같은 스위치(또는 스택)에 연결한 대역폭 위주 구성</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>3. 구성 방법 A: nmcli</h2>
+      <div class="note"><strong>SSH로 작업할 때 주의</strong>: 기존 인터페이스를 내리는 순간 접속이 끊길 수 있습니다. 원격 콘솔(iDRAC·iLO)을 열어 둔 상태에서 작업하거나, 아래처럼 <strong>스크립트 하나로 한 번에 실행</strong>하고 실패 시 자동으로 되돌리게 합니다.</div>
+<pre><code># 1) bond0 생성 (모드·감시 주기·주 포트)
+nmcli con add type bond con-name bond0 ifname bond0 \
+    bond.options "mode=active-backup,miimon=100,primary=eno0"
+
+# 2) 포트 연결 (RHEL 9 계열은 'port-type bond controller bond0' 표기도 가능)
+nmcli con add type ethernet slave-type bond con-name bond0-eno0     ifname eno0     master bond0
+nmcli con add type ethernet slave-type bond con-name bond0-enp6s0f0 ifname enp6s0f0 master bond0
+
+# 3) IP 설정
+nmcli con mod bond0 ipv4.method manual ipv4.addresses 10.0.0.31/24 \
+    ipv4.gateway 10.0.0.1 ipv4.dns 10.0.0.1 ipv6.method disabled
+
+# 4) 기존 단일 NIC 프로필은 자동 연결 해제 후 bond0 활성화
+nmcli con mod eno0     connection.autoconnect no
+nmcli con mod enp6s0f0 connection.autoconnect no
+nmcli con up bond0</code></pre>
+      <figure class="screenshot">
+        <img src="images/01-nmcli-bond.png" alt="nmcli 로 bond0 와 포트 2개를 만들고 활성화" loading="lazy" />
+        <figcaption>bond0와 포트 2개 생성 후 활성화 (예시 화면)</figcaption>
+      </figure>
+
+      <h3>SSH 원격 적용용 스크립트 (자동 롤백)</h3>
+<pre><code>#!/bin/bash
+# bond0-setup.sh  →  실행: nohup bash bond0-setup.sh &gt; /root/bond0-setup.log 2&gt;&amp;1 &amp;
+# SSH 가 끊겨도 nohup 으로 끝까지 실행되고, 게이트웨이 응답이 없으면 원래대로 되돌림
+GW=10.0.0.1
+
+nmcli con add type bond con-name bond0 ifname bond0 \
+    bond.options "mode=active-backup,miimon=100,primary=eno0" \
+    ipv4.method manual ipv4.addresses 10.0.0.31/24 ipv4.gateway $GW \
+    ipv4.dns $GW ipv6.method disabled
+nmcli con add type ethernet slave-type bond con-name bond0-eno0     ifname eno0     master bond0
+nmcli con add type ethernet slave-type bond con-name bond0-enp6s0f0 ifname enp6s0f0 master bond0
+
+nmcli con mod eno0     connection.autoconnect no
+nmcli con mod enp6s0f0 connection.autoconnect no
+nmcli con up bond0
+sleep 10
+
+if ping -c 3 -W 2 $GW &gt;/dev/null; then
+    echo "[OK] bond0 적용 완료"
+else
+    echo "[ROLLBACK] 게이트웨이 응답 없음 → 기존 설정으로 복구"
+    nmcli con delete bond0 bond0-eno0 bond0-enp6s0f0
+    nmcli con mod eno0 connection.autoconnect yes
+    nmcli con up eno0
+fi</code></pre>
+      <p>Windows에서 작성한 스크립트는 줄바꿈이 CRLF라 <code>$'\r': command not found</code> 오류가 납니다. 서버에 올린 뒤 <code>dos2unix bond0-setup.sh</code>로 변환하고 실행합니다.</p>
+    </section>
+
+    <section>
+      <h2>4. 구성 방법 B: nmtui</h2>
+      <p>화면에서 메뉴를 고르는 방식이라 명령어를 외우지 않아도 되고, 원격 콘솔에서 작업할 때 편합니다.</p>
+      <ol>
+        <li><code>nmtui</code> 실행 → <strong>Edit a connection</strong></li>
+        <li><strong>&lt;Add&gt;</strong> → 유형 <strong>Bond</strong> 선택</li>
+        <li>Profile name, Device를 <code>bond0</code>로 입력</li>
+        <li>Ports의 <strong>&lt;Add&gt;</strong> → Ethernet → Device <code>eno0</code>, 같은 방법으로 <code>enp6s0f0</code> 추가</li>
+        <li>Mode <strong>Active Backup</strong>, Primary <code>eno0</code>, Link monitoring <strong>MII</strong>, 주기 <code>100</code> ms</li>
+        <li>IPv4 CONFIGURATION을 <strong>Manual</strong>로 바꾸고 주소·게이트웨이·DNS 입력, IPv6는 Disabled</li>
+        <li><strong>&lt;OK&gt;</strong> → 기존 <code>eno0</code>, <code>enp6s0f0</code> 프로필은 편집에서 Automatically connect 해제</li>
+        <li><strong>Activate a connection</strong>에서 <code>bond0</code> 활성화</li>
+      </ol>
+      <figure class="screenshot">
+        <img src="images/02-nmtui-menu.png" alt="nmtui 메인 메뉴에서 Edit a connection 선택" loading="lazy" />
+        <figcaption>nmtui 메인 메뉴 (예시 화면)</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/03-nmtui-bond-edit.png" alt="nmtui Bond 편집 화면: 포트 2개, Active Backup, Primary eno0, MII 100ms, IPv4 수동" loading="lazy" />
+        <figcaption>Bond 편집 화면: 포트 2개, Active Backup, Primary eno0, MII 100ms (예시 화면)</figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>5. 적용 확인</h2>
+<pre><code>nmcli -f NAME,DEVICE,TYPE,STATE con show --active
+ip -br addr show bond0
+cat /proc/net/bonding/bond0</code></pre>
+      <figure class="screenshot">
+        <img src="images/04-proc-bonding-normal.png" alt="/proc/net/bonding/bond0 정상 상태: active-backup, 활성 포트 eno0" loading="lazy" />
+        <figcaption>정상 상태: 모드 active-backup, 현재 활성 포트 eno0, 두 포트 모두 MII up (예시 화면)</figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>6. SSH 접속 중 본딩 상태 실시간 확인</h2>
+      <p><code>/proc/net/bonding/bond0</code>는 커널이 본딩 상태를 그대로 보여주는 파일입니다. <code>watch</code>로 1초마다 다시 읽으면, SSH 접속을 유지한 채 전환 과정을 볼 수 있습니다.</p>
+<pre><code># 전체 상태 1초 간격 (-d: 바뀐 부분 강조)
+watch -d -n 1 cat /proc/net/bonding/bond0
+
+# 핵심 항목만
+watch -d -n 1 "grep -E 'Currently Active|Slave Interface|MII Status|Link Failure' /proc/net/bonding/bond0"
+
+# 커널 메시지로 전환 시점 확인
+journalctl -kf | grep bond0</code></pre>
+
+      <h3>장애 전환 시험</h3>
+      <p>터미널을 세 개 띄워 두고(또는 <code>tmux</code> 화면 분할) 진행합니다.</p>
+      <ol>
+        <li>터미널 1: <code>watch -d -n 1 cat /proc/net/bonding/bond0</code></li>
+        <li>터미널 2 (다른 PC): <code>ping -D 10.0.0.31</code>로 유실 구간 측정</li>
+        <li>터미널 3: 활성 포트를 끊음 → <code>ip link set eno0 down</code> 또는 케이블 분리·스위치 포트 shutdown</li>
+        <li>확인 후 복구: <code>ip link set eno0 up</code> → primary가 eno0라 다시 eno0로 돌아옴</li>
+      </ol>
+      <figure class="screenshot">
+        <img src="images/05-proc-bonding-failover.png" alt="eno0 링크 다운 후 활성 포트가 enp6s0f0 으로 전환" loading="lazy" />
+        <figcaption>eno0 다운 → 활성 포트가 enp6s0f0으로 전환, Link Failure Count 1 증가 (예시 화면)</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/06-ping-failover.png" alt="전환 중 ping 1개 유실, 커널 로그의 전환 메시지" loading="lazy" />
+        <figcaption>전환 중 ping 1개 유실(약 1초)로 SSH 세션은 유지, 커널 로그에 전환 기록 (예시 화면)</figcaption>
+      </figure>
+      <div class="note">시험할 때는 원격 콘솔을 함께 열어 두세요. 설정이 잘못되어 전환이 안 되면 SSH가 끊기므로, 콘솔에서 <code>ip link set eno0 up</code>으로 되돌립니다.</div>
+    </section>
+
+    <section>
+      <h2>7. 라운드로빈에서 세션이 끊긴 원인과 해결</h2>
+      <h3>증상</h3>
+      <p>처음에는 대역폭을 늘리려고 <code>balance-rr</code>로 구성했는데, SSH와 웹 세션이 간헐적으로 끊기고 응답이 느려졌습니다. active-backup으로 바꾸자 증상이 사라졌습니다.</p>
+
+      <h3>원인: 스위치가 두 포트를 하나로 묶지 못한 구성</h3>
+      <ul>
+        <li>라운드로빈은 <strong>같은 MAC 주소(bond0 MAC)</strong>로 패킷을 eno0, enp6s0f0에 번갈아 보냅니다.</li>
+        <li>두 NIC가 서로 다른 스위치(SW1, SW2)에 연결되어 있고 스위치끼리 포트를 하나로 묶지 않았다면, SW1 입장에서는 같은 MAC이 자기 포트(Gi1/0/10)와 SW2 쪽 연결(Po1)을 계속 오가는 것으로 보입니다. 이것이 <strong>MAC 플래핑</strong>입니다.</li>
+        <li>스위치의 MAC 주소 테이블이 계속 바뀌면서 서버로 돌아오는 패킷이 엉뚱한 경로로 가거나 버려집니다. 스위치에 따라서는 루프로 판단해 포트를 잠시 막기도 합니다.</li>
+        <li>여기에 라운드로빈 자체의 특성으로 패킷 도착 순서가 뒤바뀌어 TCP 재전송이 크게 늘고, 결국 세션 타임아웃으로 이어집니다.</li>
+      </ul>
+      <figure class="screenshot">
+        <img src="images/07-switch-macflap.png" alt="스위치 MACFLAP 로그와 서버 TCP 재전송·순서 뒤바뀜 카운터 증가" loading="lazy" />
+        <figcaption>라운드로빈 + 독립 스위치: 스위치에 MAC 플래핑 로그, 서버에 TCP 재전송·순서 뒤바뀜 급증 (예시 화면)</figcaption>
+      </figure>
+      <p>즉 "스위치 이중화 때문"이라는 판단이 맞습니다. 정확히는 <strong>스위치가 이중화되어 있는데 두 스위치가 서버 포트를 하나의 논리 포트로 묶지 않은 상태</strong>에서 라운드로빈을 쓴 것이 원인입니다.</p>
+
+      <h3>해결 1: active-backup (적용한 방법)</h3>
+      <p>한 번에 한 포트만 쓰므로 MAC이 한 스위치에서만 보입니다. 스위치 설정 없이 스위치 장애까지 대비할 수 있어, 이중화 스위치 환경에서 가장 안전한 선택입니다.</p>
+
+      <h3>해결 2: 스위치를 묶을 수 있다면 — 라운드로빈 대신 LACP</h3>
+      <p>두 스위치가 <strong>스택(StackWise, Virtual Chassis, IRF 등)</strong>이나 <strong>MLAG(vPC, MC-LAG 등)</strong>으로 하나처럼 동작한다면, 서로 다른 스위치의 포트를 하나의 포트 채널로 묶을 수 있습니다.</p>
+<pre><code>! Cisco 스택 예시 (SW1 = 멤버1, SW2 = 멤버2)
+interface range GigabitEthernet1/0/10 , GigabitEthernet2/0/10
+ switchport mode access
+ switchport access vlan 100
+ channel-group 10 mode active      ! LACP   → 서버 mode=802.3ad (권장)
+ ! channel-group 10 mode on        ! 정적   → 서버 mode=balance-rr / balance-xor
+!
+interface Port-channel10
+ switchport mode access
+ switchport access vlan 100
+
+! 확인: 두 포트가 (P) = 묶임 상태여야 함
+show etherchannel 10 summary</code></pre>
+<pre><code># 서버: LACP 모드로 변경
+nmcli con mod bond0 bond.options "mode=802.3ad,miimon=100,lacp_rate=fast,xmit_hash_policy=layer3+4"
+nmcli con up bond0
+
+# 확인: 두 포트의 Aggregator ID 가 같아야 정상
+grep -E "Bonding Mode|Aggregator ID|Slave Interface" /proc/net/bonding/bond0</code></pre>
+      <ul>
+        <li><strong>라운드로빈 대신 LACP를 권장하는 이유</strong>: 스위치를 제대로 묶어도 라운드로빈은 패킷 순서가 뒤바뀌는 문제가 남습니다. LACP는 흐름(세션)마다 한 포트를 쓰므로 순서가 지켜지고, 스위치와 링크 상태를 주고받아 잘못된 연결도 감지합니다.</li>
+        <li><code>xmit_hash_policy=layer3+4</code>: IP와 포트 기준으로 분산해, 여러 세션이 있을 때 두 포트를 고르게 씁니다. 세션 하나의 속도는 포트 하나의 속도를 넘지 않습니다.</li>
+      </ul>
+
+      <h3>해결 3: 스위치를 묶을 수 없다면</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>상황</th><th>선택</th></tr></thead>
+          <tbody>
+            <tr><td>독립 스위치 2대, 안정성 우선</td><td><code>active-backup</code></td></tr>
+            <tr><td>독립 스위치 2대, 대역폭도 일부 활용</td><td><code>balance-alb</code>(mode 6): 스위치 설정 없이 송수신 분산</td></tr>
+            <tr><td>스택·MLAG 구성 가능</td><td><code>802.3ad</code>(LACP) + 스위치 포트 채널</td></tr>
+            <tr><td>단일 스위치</td><td><code>802.3ad</code> 권장 (라운드로빈은 순서 문제로 비권장)</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>8. 트러블슈팅</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>증상</th><th>원인 및 해결</th></tr></thead>
+          <tbody>
+            <tr><td>bond0는 올라왔는데 통신 안 됨</td><td>기존 <code>eno0</code> 프로필이 같은 IP로 함께 떠 있음 → 기존 프로필 autoconnect 해제 후 down</td></tr>
+            <tr><td>포트 하나가 <code>MII Status: down</code></td><td>케이블·스위치 포트 확인, <code>ethtool eno0</code>로 Link detected 확인</td></tr>
+            <tr><td>802.3ad인데 한 포트만 사용</td><td>두 포트의 Aggregator ID가 다름 → 스위치 포트 채널 미구성 또는 LACP 모드 불일치</td></tr>
+            <tr><td>복구 후 primary로 안 돌아옴</td><td><code>primary_reselect</code> 값 확인 (기본 <code>always</code>)</td></tr>
+            <tr><td>스크립트 실행 시 <code>$'\r'</code> 오류</td><td>Windows 줄바꿈 → <code>dos2unix</code></td></tr>
+            <tr><td>라운드로빈에서 세션 끊김</td><td>7번 참고: 스위치 포트 채널 구성 또는 모드 변경</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>황태운 · 시스템 인프라 운영 관리자</p>
+  </footer>
+</body>
+</html>
