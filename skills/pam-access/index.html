@@ -1,0 +1,237 @@
+---
+title: 계정별 접속 IP 제한 (pam_access) — SSH · FTP
+skill_group: 보안 점검·하드닝
+skill_order: 20
+skill: pam_access로 SSH·FTP 계정별 접속 IP 허용/차단 (access.conf, sshd·vsftpd PAM 설정)
+link_label: 계정별 접속 IP 제한 상세
+---
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>계정별 접속 IP 제한 (pam_access) — 황태운</title>
+  <meta name="description" content="여러 계정이 같은 SSH·FTP 포트를 쓰는 서버에서 firewalld로는 불가능한 계정별 접속 IP 제한을 pam_access와 /etc/security/access.conf로 적용한 방법" />
+  <meta name="theme-color" content="#1a73e8" />
+  <link rel="stylesheet" href="../../assets/style.css" />
+  <style>
+    .table-wrap { overflow-x: auto; margin: 0.6rem 0 1rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+    th, td { border: 1px solid var(--border); padding: 0.5rem 0.7rem; text-align: left; vertical-align: top; }
+    th { background: var(--accent-soft); color: var(--accent); font-weight: 700; white-space: nowrap; }
+    .note { border-left: 4px solid var(--accent); background: var(--accent-soft); padding: 0.7rem 1rem; border-radius: 0 8px 8px 0; margin: 0.8rem 0; }
+    .warn { border-left: 4px solid #d93025; background: rgba(217,48,37,0.08); padding: 0.7rem 1rem; border-radius: 0 8px 8px 0; margin: 0.8rem 0; }
+    .screenshot { margin: 0.8rem 0 1.2rem; }
+    .screenshot img { display: block; max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 8px; }
+    .screenshot figcaption { margin-top: 0.4rem; color: var(--muted); font-size: 0.88rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <a href="../../index.html" class="back-link">← 메인으로</a>
+
+    <header>
+      <p class="tagline">보안 점검·하드닝</p>
+      <h1>계정별 접속 IP 제한 (pam_access) — SSH · FTP</h1>
+      <p class="lead">SSH와 FTP를 여러 계정이 함께 쓰는 서버에서 "root는 관리망에서만, 업로드 계정은 협력업체 IP에서만"처럼 계정마다 접속 IP를 다르게 허용해야 했습니다. firewalld는 IP와 포트만 보기 때문에 계정을 구분할 수 없어서, PAM의 <code>pam_access</code> 모듈과 <code>/etc/security/access.conf</code>로 계정 × IP 정책을 적용했습니다.</p>
+    </header>
+
+    <section>
+      <h2>1. 왜 firewalld로는 안 되나</h2>
+      <figure class="screenshot">
+        <img src="images/00-architecture.png" alt="firewalld 는 포트만 허용하고, sshd·vsftpd 의 PAM account 단계에서 pam_access 가 access.conf 의 계정별 IP 규칙으로 허용·거부" loading="lazy" />
+        <figcaption>구성도: firewalld는 22·21 포트를 열어 두기만 하고, 계정 × IP 판단은 PAM(pam_access)에서 함</figcaption>
+      </figure>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>방법</th><th>판단 기준</th><th>SSH</th><th>FTP</th><th>비고</th></tr></thead>
+          <tbody>
+            <tr><td>firewalld</td><td>IP · 포트</td><td>○</td><td>○</td><td>계정을 모름. IP 전체 차단에 사용</td></tr>
+            <tr><td>sshd <code>AllowUsers user@IP</code></td><td>계정 · IP</td><td>○</td><td>×</td><td>SSH 전용, 규칙이 sshd_config에 섞임</td></tr>
+            <tr><td>tcp_wrappers (<code>hosts.allow</code>)</td><td>IP · 서비스</td><td colspan="2">RHEL 8부터 제거됨</td><td>사용 불가</td></tr>
+            <tr><td><strong>pam_access</strong></td><td><strong>계정 · 그룹 · IP</strong></td><td>○</td><td>○</td><td><strong>PAM을 쓰는 모든 서비스에 같은 규칙 적용</strong></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>2. PAM 설정: 서비스에 pam_access 연결</h2>
+      <p>PAM은 <code>auth</code>(비밀번호 확인) → <code>account</code>(이 계정이 지금 들어와도 되는지) → <code>session</code> 순서로 동작합니다. 접속 IP 제한은 <strong>account</strong> 단계에 넣습니다.</p>
+      <h3>/etc/pam.d/sshd</h3>
+<pre><code>#%PAM-1.0
+auth       substack     password-auth
+auth       include      postlogin
+account    required     pam_sepermit.so
+account    required     pam_nologin.so
+<strong>account    required     pam_access.so accessfile=/etc/security/access.conf</strong>
+account    include      password-auth
+password   include      password-auth
+...</code></pre>
+      <h3>/etc/pam.d/vsftpd</h3>
+<pre><code>#%PAM-1.0
+session    optional     pam_keyinit.so force revoke
+auth       required     pam_listfile.so item=user sense=deny file=/etc/vsftpd/ftpusers onerr=succeed
+auth       required     pam_shells.so
+auth       include      password-auth
+<strong>account    required     pam_access.so accessfile=/etc/security/access.conf</strong>
+account    include      password-auth
+session    required     pam_loginuid.so
+session    include      password-auth</code></pre>
+      <div class="note">
+        <strong>password-auth / system-auth가 아니라 서비스 파일에 넣은 이유</strong>
+        <ul>
+          <li>Rocky·RHEL 8 이후 <code>password-auth</code>, <code>system-auth</code>는 <strong>authselect</strong>가 관리합니다. 직접 고치면 <code>authselect apply-changes</code> 때 덮어써집니다.</li>
+          <li><code>authselect enable-feature with-pamaccess</code>를 쓰면 pam_access가 공통 파일에 들어가 <strong>콘솔 로그인, su 등 모든 서비스</strong>에 적용됩니다. SSH·FTP만 제한하려면 서비스 파일에 넣는 쪽이 범위가 정확합니다.</li>
+        </ul>
+      </div>
+      <h3>서비스 쪽 확인 사항</h3>
+<pre><code># sshd: PAM 을 거치도록 (Rocky 기본 yes), IP 를 이름으로 바꾸지 않도록
+# /etc/ssh/sshd_config
+UsePAM yes
+UseDNS no
+
+# vsftpd: PAM 서비스 이름과 IPv4 대기
+# /etc/vsftpd/vsftpd.conf
+pam_service_name=vsftpd
+listen=YES
+listen_ipv6=NO
+
+systemctl restart sshd vsftpd</code></pre>
+      <figure class="screenshot">
+        <img src="images/01-pam-config.png" alt="pam.d/sshd 와 pam.d/vsftpd 의 account 줄에 pam_access 추가, sshd UsePAM yes, vsftpd listen IPv4 설정 확인" loading="lazy" />
+        <figcaption>두 서비스의 account 단계에 pam_access 추가, sshd·vsftpd 설정 확인 (예시 화면)</figcaption>
+      </figure>
+      <div class="warn"><strong>vsftpd <code>listen_ipv6=YES</code> 주의</strong>: Rocky 기본값은 IPv6 소켓 하나로 IPv4도 받는 방식이라, 접속 IP가 <code>::ffff:203.0.113.10</code> 형태로 PAM에 전달됩니다. 이러면 access.conf의 IPv4 규칙과 맞지 않아 <strong>허용한 IP도 거부</strong>될 수 있습니다. IPv4만 쓴다면 <code>listen=YES</code>, <code>listen_ipv6=NO</code>로 바꿉니다.</div>
+    </section>
+
+    <section>
+      <h2>3. /etc/security/access.conf 규칙</h2>
+      <h3>형식</h3>
+<pre><code>권한 : 사용자 : 접속지
+  +      허용
+  -      거부</code></pre>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>칸</th><th>쓸 수 있는 값</th></tr></thead>
+          <tbody>
+            <tr><td>권한</td><td><code>+</code> 허용, <code>-</code> 거부</td></tr>
+            <tr><td>사용자</td><td>계정 이름(<code>webftp</code>), 그룹(<code>(developers)</code> 괄호), <code>ALL</code>, <code>ALL EXCEPT root</code>. 여러 개는 공백으로 구분</td></tr>
+            <tr><td>접속지</td><td>IP(<code>203.0.113.10</code>), 대역(<code>10.0.0.0/24</code>), IP 앞부분(<code>10.0.10.</code> 점으로 끝냄), <code>LOCAL</code>(콘솔 등 원격이 아닌 접속), <code>ALL</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><strong>위에서부터 차례로 보고 처음 맞는 규칙</strong>을 적용합니다. 맞는 규칙이 하나도 없으면 허용입니다. 그래서 계정마다 "허용 → 나머지 거부" 두 줄을 한 쌍으로 쓰고, 마지막에 전체 기본 정책을 둡니다.</p>
+      <h3>적용한 정책 예</h3>
+<pre><code># /etc/security/access.conf
+
+# 관리자: 관리망에서만
++ : root : 10.0.0.0/24
+- : root : ALL
+
+# 웹 업로드 계정(FTP·SFTP): 협력업체 IP 만
++ : webftp : 203.0.113.10 203.0.113.11
+- : webftp : ALL
+
+# 개발자 그룹: 개발망과 VPN 대역
++ : (developers) : 10.0.10.0/24 192.168.50.0/24
+- : (developers) : ALL
+
+# 백업 계정: 백업 서버에서만
++ : backup : 10.0.0.40
+- : backup : ALL
+
+# 그 외 모든 계정: 사내망과 콘솔만
++ : ALL : 10.0.0.0/8 LOCAL
+- : ALL : ALL</code></pre>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>접속</th><th>처음 맞는 규칙</th><th>결과</th></tr></thead>
+          <tbody>
+            <tr><td>root @ 10.0.0.25</td><td><code>+ : root : 10.0.0.0/24</code></td><td>허용</td></tr>
+            <tr><td>root @ 203.0.113.10</td><td><code>- : root : ALL</code></td><td>거부</td></tr>
+            <tr><td>webftp @ 203.0.113.10</td><td><code>+ : webftp : 203.0.113.10 ...</code></td><td>허용</td></tr>
+            <tr><td>webftp @ 203.0.113.99</td><td><code>- : webftp : ALL</code></td><td>거부</td></tr>
+            <tr><td>kim(developers) @ 192.168.50.7</td><td><code>+ : (developers) : ...</code></td><td>허용</td></tr>
+            <tr><td>hong(일반) @ 10.20.1.5</td><td><code>+ : ALL : 10.0.0.0/8 LOCAL</code></td><td>허용</td></tr>
+            <tr><td>hong(일반) @ 8.8.8.8</td><td><code>- : ALL : ALL</code></td><td>거부</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="note"><strong>SSH와 FTP 규칙을 다르게</strong> 하고 싶으면 파일을 나눕니다. 예를 들어 <code>/etc/pam.d/vsftpd</code>에서 <code>accessfile=/etc/security/access-ftp.conf</code>로 지정하면, webftp는 FTP는 허용하고 SSH는 전부 막는 식으로 따로 관리할 수 있습니다.</div>
+      <p>access.conf는 접속할 때마다 읽으므로, <strong>규칙을 바꾸면 서비스 재시작 없이 바로 적용</strong>됩니다.</p>
+    </section>
+
+    <section>
+      <h2>4. 적용 전 시험</h2>
+      <div class="warn">규칙을 잘못 쓰면 root를 포함해 모든 SSH 접속이 막힐 수 있습니다. <strong>기존 SSH 세션 하나를 열어 둔 채</strong>, 새 창에서 접속을 시험하고 확인한 뒤에 기존 세션을 닫습니다. 원격 콘솔(iDRAC·iLO)도 준비해 둡니다.</div>
+<pre><code># pamtester (EPEL) 로 실제 접속 없이 계정 × IP 판정 확인
+dnf install -y epel-release &amp;&amp; dnf install -y pamtester
+
+pamtester -I rhost=203.0.113.10 sshd   webftp acct_mgmt   # 허용 예상
+pamtester -I rhost=203.0.113.99 sshd   webftp acct_mgmt   # 거부 예상
+pamtester -I rhost=203.0.113.99 vsftpd webftp acct_mgmt</code></pre>
+      <figure class="screenshot">
+        <img src="images/04-access-conf-test.png" alt="access.conf 규칙 내용과 pamtester 로 webftp 계정의 IP별 허용·거부 판정" loading="lazy" />
+        <figcaption>적용한 규칙과 pamtester 판정: 203.0.113.10 허용, 203.0.113.99 거부 (예시 화면)</figcaption>
+      </figure>
+<pre><code># 판정 과정을 자세히 보고 싶을 때: pam_access 에 debug 를 붙이면 /var/log/secure 에 기록
+account    required     pam_access.so accessfile=/etc/security/access.conf debug</code></pre>
+    </section>
+
+    <section>
+      <h2>5. 동작 확인</h2>
+      <h3>SSH</h3>
+      <p>허용되지 않은 IP에서는 비밀번호를 맞게 입력해도 바로 연결이 끊깁니다. 클라이언트에는 이유가 나오지 않고, 서버 <code>/var/log/secure</code>에 남습니다. <strong>SSH 키 인증도 account 단계를 거치므로 똑같이 막힙니다.</strong></p>
+      <figure class="screenshot">
+        <img src="images/02-ssh-denied.png" alt="미등록 IP 에서 SSH 접속 시 Connection closed, 서버 로그에 pam_access access denied 와 PAM account configuration 거부" loading="lazy" />
+        <figcaption>미등록 IP: 비밀번호 입력 후 연결 끊김, 로그에 <code>pam_access ... access denied</code> / 등록 IP: 정상 로그인 (예시 화면)</figcaption>
+      </figure>
+      <h3>FTP</h3>
+      <p>FTP 클라이언트에는 비밀번호가 틀렸을 때와 같은 <code>530 Login incorrect.</code>가 나옵니다. 비밀번호 문제인지 IP 제한인지는 서버 로그로 구분합니다.</p>
+      <figure class="screenshot">
+        <img src="images/03-ftp-denied.png" alt="미등록 IP 에서 FTP 로그인 530 Login incorrect, 등록 IP 에서 230 Login successful, 서버 로그 확인" loading="lazy" />
+        <figcaption>미등록 IP는 530, 등록 IP는 230. <code>/var/log/secure</code>의 pam_access 줄로 IP 제한 때문임을 확인 (예시 화면)</figcaption>
+      </figure>
+<pre><code># 거부 기록만 모아 보기
+grep 'pam_access' /var/log/secure | grep 'access denied'
+
+# 계정·IP 별 거부 횟수
+grep 'pam_access.*access denied' /var/log/secure \
+  | sed -E "s/.*user .(\S+). from .(\S+)'.*/\1 \2/" | sort | uniq -c | sort -rn</code></pre>
+    </section>
+
+    <section>
+      <h2>6. 함께 쓰면 좋은 설정</h2>
+      <ul>
+        <li><strong>firewalld와 역할 나누기</strong>: pam_access는 "로그인"을 막을 뿐, 접속 자체와 비밀번호 입력 시도는 서비스까지 들어옵니다. 어떤 계정으로도 쓸 일이 없는 IP·국가 대역은 firewalld(ipset)에서 먼저 막습니다.</li>
+        <li><strong>로그인 실패 잠금</strong>: 비밀번호 대입 시도는 <a href="../pam-password-policy/index.html">PAM 비밀번호 정책(faillock)</a>으로 계정을 잠급니다.</li>
+        <li><strong>FTP 계정은 셸 제한</strong>: 업로드 전용 계정은 <code>/sbin/nologin</code> 셸과 vsftpd <code>chroot_local_user=YES</code>로 홈 디렉터리 밖을 보지 못하게 합니다. 이때 <code>pam_shells.so</code>가 nologin을 거부하므로 <code>/etc/shells</code>에 <code>/sbin/nologin</code>을 추가하거나 해당 줄을 조정합니다.</li>
+        <li><strong>SFTP</strong>: SFTP는 sshd를 통하므로 <code>/etc/pam.d/sshd</code> 규칙이 그대로 적용됩니다.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>7. 트러블슈팅</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>증상</th><th>원인 및 해결</th></tr></thead>
+          <tbody>
+            <tr><td>규칙을 넣었는데 아무 효과 없음</td><td>서비스 PAM 파일에 pam_access가 없거나 <code>auth</code> 줄에 넣음 → <code>account</code>로. sshd는 <code>UsePAM yes</code> 확인</td></tr>
+            <tr><td>허용한 IP도 FTP 거부</td><td>vsftpd <code>listen_ipv6=YES</code>로 IP가 <code>::ffff:</code> 형태로 전달됨 → IPv4 대기로 변경</td></tr>
+            <tr><td>접속이 느리고 가끔 거부</td><td>접속지 칸에 호스트 이름을 쓰거나 <code>UseDNS yes</code> → DNS 조회 지연. IP로만 작성, <code>UseDNS no</code></td></tr>
+            <tr><td>root가 콘솔에서도 못 들어감</td><td>access.conf는 서비스 파일에 넣은 SSH·FTP에만 적용됨. 콘솔까지 막혔다면 <code>authselect with-pamaccess</code>가 켜져 있는지 확인. 콘솔용으로 <code>LOCAL</code> 허용 줄 추가</td></tr>
+            <tr><td>그룹 규칙이 안 맞음</td><td>그룹은 괄호 필수 <code>(developers)</code>. 괄호 없이 쓰면 그 이름의 계정으로 해석</td></tr>
+            <tr><td>대역 앞부분 규칙이 다른 대역까지 허용</td><td><code>10.0.1</code>처럼 점 없이 쓰면 10.0.10.x, 10.0.100.x도 맞음 → <code>10.0.1.</code> 또는 <code>10.0.1.0/24</code></td></tr>
+            <tr><td>FTP 530인데 비밀번호는 맞음</td><td><code>/var/log/secure</code>에 pam_access 거부가 있으면 IP 제한, 없으면 <code>ftpusers</code>·<code>pam_shells</code> 확인</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>황태운 · 시스템 인프라 운영 관리자</p>
+  </footer>
+</body>
+</html>
