@@ -41,16 +41,10 @@ title: 작물 질병 진단 AI·DB (crop-ai) — 스마트팜 하위 프로젝�
 
     <section>
       <h2>1. 하는 일</h2>
-      <pre><code> 앱 화면 (React) ── 사진 + 작물 선택(TOMATO / POTATO / CORN)
-        │
-        ▼
- 백엔드 (Spring Boot) ────────────►  MySQL my_ncpms (병 이름·설명·방제법)
-        │  POST /predict                      ▲
-        ▼                                     │ 병 정보 채우기
- ★ AI 서버 (FastAPI, 127.0.0.1:8000)     NCPMS Open API (농촌진흥청)
-        │  병 후보 3개 + 확률
-        ▼
- 백엔드가 확률을 보고 결과 결정 → DB에서 설명·방제법을 찾아 화면에 표시</code></pre>
+      <figure class="screenshot">
+        <img src="images/00-architecture.png" alt="사용자가 React 앱에 잎 사진과 작물을 올리면 Spring Boot 백엔드가 FastAPI 추론 서버에 보내 후보 3개를 받고, MySQL my_ncpms에서 병 정보를 조회. 학습 데이터로 MobileNetV2를 학습해 models/에 저장하고, NCPMS Open API로 병 설명을 받아 DB를 채움" loading="lazy" />
+        <figcaption>파란색: 운영 중 흐름, 초록색: AI 추론, 주황색: 준비 작업(학습·병 정보 채우기), 빨간색: 연결 전 라벨 대조</figcaption>
+      </figure>
       <div class="table-wrap">
         <table>
           <thead><tr><th>폴더</th><th>내용</th></tr></thead>
