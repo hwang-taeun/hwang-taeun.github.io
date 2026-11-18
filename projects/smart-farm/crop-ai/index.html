@@ -1,0 +1,208 @@
+---
+title: 작물 질병 진단 AI·DB (crop-ai) — 스마트팜 하위 프로젝트
+---
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>작물 질병 진단 AI·DB (crop-ai) — 황태운</title>
+  <meta name="description" content="토마토·감자·옥수수 잎 사진으로 병 후보 3개를 돌려주는 FastAPI 추론 서버, MobileNetV2 전이학습 코드, 농촌진흥청 NCPMS Open API로 채운 병 정보 MySQL DB. 스마트팜 개인 프로젝트의 하위 프로젝트" />
+  <meta name="theme-color" content="#1a73e8" />
+  <link rel="stylesheet" href="../../../assets/style.css" />
+  <style>
+    .table-wrap { overflow-x: auto; margin: 0.6rem 0 1rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+    th, td { border: 1px solid var(--border); padding: 0.5rem 0.7rem; text-align: left; vertical-align: top; }
+    th { background: var(--accent-soft); color: var(--accent); font-weight: 700; white-space: nowrap; }
+    .note { border-left: 4px solid var(--accent); background: var(--accent-soft); padding: 0.7rem 1rem; border-radius: 0 8px 8px 0; margin: 0.8rem 0; }
+    .warn { border-left: 4px solid #d93025; background: rgba(217,48,37,0.08); padding: 0.7rem 1rem; border-radius: 0 8px 8px 0; margin: 0.8rem 0; }
+    .plan { border-left: 4px solid #e8710a; background: rgba(232,113,10,0.08); padding: 0.7rem 1rem; border-radius: 0 8px 8px 0; margin: 0.8rem 0; }
+    .screenshot { margin: 0.8rem 0 1.2rem; }
+    .screenshot img { display: block; max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 8px; }
+    .screenshot figcaption { margin-top: 0.4rem; color: var(--muted); font-size: 0.88rem; }
+    .badge { display: inline-block; font-size: 0.82rem; font-weight: 700; padding: 0.12rem 0.55rem; border-radius: 999px; margin-right: 0.3rem; }
+    .b-personal { background: #e6f4ea; color: #188038; }
+    .b-wip { background: rgba(232,113,10,0.12); color: #c25e00; }
+    .b-done { background: var(--accent-soft); color: var(--accent); }
+  </style>
+</head>
+<body>
+  <main>
+    <a href="../" class="back-link">← 스마트팜 프로젝트로</a>
+
+    <header>
+      <p class="tagline">개인 프로젝트 · 스마트팜 하위 프로젝트</p>
+      <h1>작물 질병 진단 AI·DB (crop-ai)</h1>
+      <p><span class="badge b-personal">개인 프로젝트</span><span class="badge b-done">서버·DB 완성</span><span class="badge b-wip">모델 학습 전</span></p>
+      <p class="lead">토마토·감자·옥수수 잎 사진을 올리면 <strong>가능성 높은 병 3개와 확률</strong>을 알려주는 진단 앱입니다. 앱 화면(React), 백엔드(Spring Boot), <strong>AI 추론 서버</strong>, <strong>병 정보 DB</strong>까지 직접 만들었고, 이 페이지는 그중 AI 서버와 DB를 중심으로 정리했습니다.</p>
+      <p class="note">아직 학습용 사진을 확보하지 못해 <strong>실제 학습된 모델은 없습니다.</strong> 아래 진단 화면은 테스트용 가짜 모델(<code>test-fake</code>)로 서버 동작을 확인한 결과이며, 진단 정확도는 아직 말할 수 없습니다.</p>
+    </header>
+
+    <section>
+      <h2>1. 하는 일</h2>
+      <pre><code> 앱 화면 (React) ── 사진 + 작물 선택(TOMATO / POTATO / CORN)
+        │
+        ▼
+ 백엔드 (Spring Boot) ────────────►  MySQL my_ncpms (병 이름·설명·방제법)
+        │  POST /predict                      ▲
+        ▼                                     │ 병 정보 채우기
+ ★ AI 서버 (FastAPI, 127.0.0.1:8000)     NCPMS Open API (농촌진흥청)
+        │  병 후보 3개 + 확률
+        ▼
+ 백엔드가 확률을 보고 결과 결정 → DB에서 설명·방제법을 찾아 화면에 표시</code></pre>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>폴더</th><th>내용</th></tr></thead>
+          <tbody>
+            <tr><td><code>app/</code></td><td>FastAPI 서버. <code>/predict</code>, <code>/health</code>, 이미지 전처리, 작물 마스킹, 17개 라벨 기준표</td></tr>
+            <tr><td><code>training/</code></td><td>MobileNetV2 2단계 전이학습(<code>train.py</code>), 정확도·혼동행렬·온도 보정(<code>evaluate.py</code>)</td></tr>
+            <tr><td><code>db/</code></td><td>테이블 설계, NCPMS 클라이언트, 병 설명 채우기 도구, 라벨 대조 도구</td></tr>
+            <tr><td><code>scripts/</code></td><td>DB 백업·복원 (공유용은 회원 정보 제외)</td></tr>
+            <tr><td><code>tests/</code></td><td>자동 테스트 34개 (서버 7, 예측 로직 5, DB·NCPMS 22)</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>2. NCPMS Open API 신청</h2>
+      <p>병 설명과 방제법은 농촌진흥청 <strong>국가농작물병해충관리시스템(NCPMS)</strong>의 Open API에서 받습니다. 회원가입 후 마이페이지 → openAPI 신청에서 신청하면 인증키가 바로 생성됩니다.</p>
+      <figure class="screenshot">
+        <img src="images/01-ncpms-apply.png" alt="NCPMS openAPI 신청 화면: 제공서비스 중 병해충검색이 XML·JSON 방식, 사용도메인 입력란" loading="lazy" />
+        <figcaption>병 검색·상세 정보는 "병해충검색" 서비스(XML·JSON). 사용도메인은 실제로 호출할 서버 주소로 입력</figcaption>
+      </figure>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>항목</th><th>내용</th></tr></thead>
+          <tbody>
+            <tr><td>사용한 서비스</td><td><code>SVC01</code> 병 검색(작물명·병명 → <code>sickKey</code>), <code>SVC05</code> 병 상세(증상·발생 환경·방제 방법)</td></tr>
+            <tr><td>사용도메인</td><td>등록하지 않은 곳에서 호출하면 <code>ERR_105</code>(미등록 도메인). 로컬에서 통과해도 운영 서버에서 다시 확인 필요</td></tr>
+            <tr><td>인증키 보관</td><td><code>.env</code>의 <code>NCPMS_API_KEY</code>에만 저장, 저장소에는 <code>.env.example</code>만 올림</td></tr>
+            <tr><td>이용 조건</td><td>공공누리 제2유형 — 출처 표시 필수, 상업적 이용 금지. 앱 화면에 "농촌진흥청 NCPMS" 출처 표시</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>응답이 XML일 때와 JSON일 때가 섞여 있어, 클라이언트는 첫 글자로 형식을 판단해 둘 다 읽게 만들었습니다. 본문에 섞인 <code>&lt;br&gt;</code>·이스케이프된 태그(<code>&amp;lt;b&amp;gt;</code>)·CDATA도 정리해서 DB에는 줄바꿈만 남긴 순수 텍스트로 넣습니다.</p>
+    </section>
+
+    <section>
+      <h2>3. 병 정보 DB 채우기</h2>
+      <p>모델이 쓰는 라벨은 PlantVillage 데이터셋 폴더명(영문)이고, NCPMS 병명은 한글이라 1:1로 맞지 않습니다. 작물명 + 한글 병명으로 먼저 찾고, 없으면 영문 병명으로 찾은 뒤, 사람이 확인한 결과를 <code>sickkey_map.json</code>에 고정했습니다.</p>
+      <figure class="screenshot">
+        <img src="images/05-ncpms-fetch.png" alt="seed_disease_texts fetch 실행 결과: 라벨별 NCPMS 병명과 우리 이름, 일부는 수동 문구 적용" loading="lazy" />
+        <figcaption>먼저 JSON 파일로만 받아 확인하고, <code>--apply</code>를 붙여야 DB에 반영 (API 키는 환경변수)</figcaption>
+      </figure>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>출처</th><th>건수</th><th>내용</th></tr></thead>
+          <tbody>
+            <tr><td>NCPMS 원문</td><td>12종</td><td>병 설명·방제법</td></tr>
+            <tr><td>고정 문구</td><td>4종</td><td>정상 잎 3종(병 API 대상 아님), 점박이응애(해충이라 병 API 대상 아님)</td></tr>
+            <tr><td>사람이 쓴 초안</td><td>4건</td><td>NCPMS에 없거나 비어 있는 칸. 옥수수 그을음무늬병 등 — <strong>검토 전이라 서비스 사용 금지</strong> 표시</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>빨간 상자처럼 NCPMS 병명과 화면에 쓸 이름이 다른 경우(토마토 Early blight = NCPMS "겹무늬병", Target spot = NCPMS "잎마름병")가 있어, 화면용 한글 병명 3개는 확정 전으로 남겨 두었습니다.</p>
+      <figure class="screenshot">
+        <img src="images/06-db.png" alt="MySQL disease 테이블 17행: id, crop, label, name_ko" loading="lazy" />
+        <figcaption><code>my_ncpms.disease</code> 17행. 테이블은 member, disease, diagnosis, diagnosis_candidate 4개</figcaption>
+      </figure>
+      <pre><code># 백업 (공유용: 모든 테이블 구조 + disease 데이터만, 회원 정보 제외)
+DB_USER=ncpms DB_NAME=my_ncpms bash scripts/backup_db.sh
+# 복원 (utf8mb4 지정으로 한글 깨짐 방지)
+DB_USER=ncpms DB_NAME=my_ncpms bash scripts/restore_db.sh db/backup/my_ncpms.sql</code></pre>
+    </section>
+
+    <section>
+      <h2>4. 라벨 대조 — 한 글자만 달라도 연결이 끊김</h2>
+      <p>진단 결과의 <code>label</code>로 DB의 병 정보를 찾기 때문에, <strong>모델 클래스명 · DB <code>disease.label</code> · 학습 폴더명</strong> 세 곳이 글자 하나까지 같아야 합니다. 밑줄 개수나 공백 하나만 달라도 결과가 병 정보와 연결되지 않아서, 대조 도구를 만들어 학습·연동 전에 먼저 돌립니다.</p>
+      <figure class="screenshot">
+        <img src="images/03-check-labels.png" alt="check_labels 실행: data.sql 17개와 일치, 다른 파일과는 끝 밑줄 차이로 불일치" loading="lazy" />
+        <figcaption>위: 실제 실행 결과(일치). 아래: 끝 밑줄 하나가 빠진 경우 예시</figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>5. 추론 서버 (FastAPI)</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>처리</th><th>내용</th></tr></thead>
+          <tbody>
+            <tr><td>이미지 검사</td><td>깨진 파일 확인, jpg·png만 허용, 휴대폰 사진 회전(EXIF) 보정, 224×224로 맞춤. 최대 10MB(초과 시 413)</td></tr>
+            <tr><td>작물 마스킹</td><td>사용자가 고른 작물의 병만 남기고 확률을 다시 계산 → 토마토 사진이 감자 병으로 나오는 일 방지</td></tr>
+            <tr><td>응답</td><td>항상 상위 3개 + 확률. "0.8 이상이면 1개만, 0.5 미만이면 불확실" 같은 판단은 백엔드가 담당</td></tr>
+            <tr><td>내부 인증</td><td><code>X-Internal-Token</code>을 상수 시간 비교(<code>hmac.compare_digest</code>), 불일치 시 401</td></tr>
+            <tr><td>노출 범위</td><td>127.0.0.1에서만 대기, 외부 포트 열지 않음. 백엔드만 같은 서버·내부망에서 호출</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <figure class="screenshot">
+        <img src="images/04-predict.png" alt="health 확인, 토마토로 예측 시 상위 3개, 같은 사진을 감자로 바꾸면 감자 역병, 토큰 없으면 401, 잘못된 작물은 400" loading="lazy" />
+        <figcaption>테스트용 가짜 모델로 확인한 실제 응답. 같은 사진도 작물 선택에 따라 후보가 바뀜</figcaption>
+      </figure>
+      <pre><code>uvicorn app.main:app --host 127.0.0.1 --port 8000      # models/ 에 학습 결과가 있어야 시작
+curl http://127.0.0.1:8000/health</code></pre>
+    </section>
+
+    <section>
+      <h2>6. 모델 학습 · 평가 <span class="badge b-wip">학습 전</span></h2>
+      <p class="plan">학습·평가 코드는 완성했지만 학습용 사진을 아직 확보하지 못해 실행 전입니다.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>단계</th><th>내용</th></tr></thead>
+          <tbody>
+            <tr><td>1단계</td><td>ImageNet으로 학습된 MobileNetV2는 고정하고 마지막 분류층만 학습</td></tr>
+            <tr><td>2단계</td><td>상위 30개 층을 풀어(BatchNorm은 고정) 학습률 1e-5로 미세 조정. 클래스별 사진 수 차이는 가중치로 보정, 증강(뒤집기·회전·밝기)은 모델 안에 포함</td></tr>
+            <tr><td>데이터 누수 방지</td><td>PlantVillage는 같은 잎을 여러 장 찍은 사진이라, 검증용 폴더(<code>--val-dir</code>)를 따로 두지 않으면 점수가 부풀려짐</td></tr>
+            <tr><td>평가</td><td>top-1·top-3 정확도, 혼동행렬, 작물 마스킹 적용 정확도. 실험실 배경 사진과 실제 밭 사진을 따로 평가</td></tr>
+            <tr><td>확률 보정</td><td>온도 보정(temperature scaling)으로 "확률 90%"가 실제로 90% 맞도록 조정해 <code>model_meta.json</code>에 저장</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <pre><code>python -m training.train --train-dir data/train --val-dir data/valid
+python -m training.evaluate --data-dir data/valid --fit-temperature
+python -m training.evaluate --data-dir data/real_photos --tag real     # 실제 사진 성적표</code></pre>
+    </section>
+
+    <section>
+      <h2>7. 테스트</h2>
+      <figure class="screenshot">
+        <img src="images/02-pytest.png" alt="pytest 34 passed" loading="lazy" />
+        <figcaption>TensorFlow 없이도 돌도록 가짜 모델·가짜 NCPMS 응답으로 테스트 (실제 실행 결과)</figcaption>
+      </figure>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>파일</th><th>검사 내용</th></tr></thead>
+          <tbody>
+            <tr><td><code>test_api.py</code> (7)</td><td>정상 예측, 작물에 따라 결과 변경, 깨진 이미지·GIF 400, 잘못된 작물 400, health, 토큰 검사</td></tr>
+            <tr><td><code>test_predictor.py</code> (5)</td><td>라벨 17개, 선택 작물만 반환, 옥수수 4개 중 상위 3개, 온도 보정 효과</td></tr>
+            <tr><td><code>test_db.py</code> (22)</td><td>XML/JSON 파싱, 오류 코드 처리, 한글·영문 병명 매칭(다른 작물 병 제외 등), 라벨 대조, 수동 문구 적용</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>8. 남은 일과 주의</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>순서</th><th>할 일</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>학습용 사진 확보(PlantVillage 등) → 모델 학습·평가</td></tr>
+            <tr><td>2</td><td>실제 휴대폰으로 찍은 잎 사진을 모아 따로 정확도 확인</td></tr>
+            <tr><td>3</td><td>백엔드와 요청·응답 형식 확정 후 연결 테스트</td></tr>
+            <tr><td>4</td><td>사람이 쓴 초안 4건과 화면용 한글 병명 3개 검토·확정</td></tr>
+            <tr><td>5</td><td>사용자가 "진단이 틀림"으로 표시한 사진으로 재학습, NCPMS 지역별 예찰 정보 연동</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note">병 설명은 공공데이터를 가공한 참고용입니다. 약제 안내에는 "사용 전 제품 라벨과 지역 농업기술센터에 확인" 문구를 함께 표시합니다.</p>
+    </section>
+  </main>
+
+  <footer>
+    <p>황태운 · 시스템 인프라 운영 관리자</p>
+  </footer>
+</body>
+</html>
