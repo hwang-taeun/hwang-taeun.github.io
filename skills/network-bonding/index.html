@@ -37,12 +37,10 @@ link_label: 네트워크 본딩 구성 상세
 
     <section>
       <h2>1. 구성</h2>
-<pre><code>                 ┌──────────── bond0 (10.0.0.31/24) ────────────┐
-                 │                                               │
-               eno0 (primary)                               enp6s0f0 (backup)
-                 │                                               │
-             [ SW1 Gi1/0/10 ] ════ 스위치 간 연결(Po1) ════ [ SW2 Gi2/0/10 ]
-                 └───────────────── 게이트웨이 10.0.0.1 ──────────────┘</code></pre>
+      <figure class="screenshot">
+        <img src="images/00-architecture.png" alt="bond0 구성도: eno0은 SW1, enp6s0f0은 SW2에 연결, 스위치 간 Po1, 게이트웨이 10.0.0.1" loading="lazy" />
+        <figcaption>구성도: eno0(활성)→SW1, enp6s0f0(대기)→SW2</figcaption>
+      </figure>
       <div class="table-wrap">
         <table>
           <tbody>
