@@ -1,0 +1,363 @@
+---
+title: 홈서버 구축 (Synology NAS · Cloudflare DNS · Let's Encrypt 자동 갱신)
+short_title: 홈서버 구축 (NAS · Cloudflare · SSL)
+type: project
+anchor: home-server
+order: 150
+featured: true
+summary: Cloudflare 도메인·DNS API로 유동 IP 자동 반영, acme.sh DNS-01로 Synology NAS 인증서를 무인 갱신
+problem: >-
+  가정용 인터넷은 공인 IP가 수시로 바뀌고, Synology DSM이 80 포트의 모든 요청을 로그인 페이지로 넘겨서
+  DSM 기본 Let's Encrypt 발급(HTTP-01 검증)이 계속 실패했습니다.
+action: >-
+  Cloudflare에서 도메인을 등록하고, 권한을 DNS 편집으로 좁힌 API 토큰으로 A 레코드를 자동 수정하는 DDNS 스크립트를 만들었습니다.
+  인증서는 acme.sh의 DNS-01 검증(Cloudflare에 TXT 레코드 자동 추가)으로 바꾸고, DSM 인증서 폴더에 직접 적용하는 갱신 스크립트를 작업 스케줄러에 등록했습니다.
+result: >-
+  IP가 바뀌어도 5분 안에 도메인이 따라가고, 인증서는 사람 손 없이 갱신·적용됩니다.
+  80 포트를 열지 않아도 되고 와일드카드 인증서까지 받게 되었으며, 국가 기반 방화벽으로 국내 접속만 허용했습니다.
+skill_group: 웹 & 네트워크 서비스
+skill_order: 30
+skill: Cloudflare DNS API 자동화(DDNS), acme.sh DNS-01로 Synology DSM 인증서 무인 갱신
+link_label: 홈서버 구축 상세
+---
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>홈서버 구축 (Synology · Cloudflare · Let's Encrypt) — 황태운</title>
+  <meta name="description" content="Cloudflare에서 도메인 등록, DNS 레코드 설정과 API를 이용한 레코드 추가·변경(DDNS), acme.sh DNS-01 검증으로 Synology NAS 인증서를 자동 갱신한 홈서버 구축 과정" />
+  <meta name="theme-color" content="#1a73e8" />
+  <link rel="stylesheet" href="../../assets/style.css" />
+  <style>
+    .table-wrap { overflow-x: auto; margin: 0.6rem 0 1rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+    th, td { border: 1px solid var(--border); padding: 0.5rem 0.7rem; text-align: left; vertical-align: top; }
+    th { background: var(--accent-soft); color: var(--accent); font-weight: 700; white-space: nowrap; }
+    .note { border-left: 4px solid var(--accent); background: var(--accent-soft); padding: 0.7rem 1rem; border-radius: 0 8px 8px 0; margin: 0.8rem 0; }
+    .warn { border-left: 4px solid #d93025; background: rgba(217,48,37,0.08); padding: 0.7rem 1rem; border-radius: 0 8px 8px 0; margin: 0.8rem 0; }
+    .screenshot { margin: 0.8rem 0 1.2rem; }
+    .screenshot img { display: block; max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 8px; }
+    .screenshot figcaption { margin-top: 0.4rem; color: var(--muted); font-size: 0.88rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <a href="../../index.html" class="back-link">← 메인으로</a>
+
+    <header>
+      <p class="tagline">프로젝트 · 웹 &amp; 네트워크 서비스</p>
+      <h1>홈서버 구축 — Synology NAS · Cloudflare · Let's Encrypt</h1>
+      <p class="lead">집에 있는 Synology NAS와 Linux 서버를 개인 도메인으로 외부에서 안전하게 접속할 수 있게 만들었습니다. 도메인 등록과 DNS는 Cloudflare, 인증서는 Let's Encrypt를 쓰고, <strong>유동 IP 반영과 인증서 갱신을 모두 API와 스크립트로 자동화</strong>했습니다.</p>
+      <p class="note">도메인은 예시 <code>myhomelab.example</code>, 공인 IP는 문서용 대역(<code>203.0.113.x</code>, <code>198.51.100.x</code>)으로 바꿨습니다. 화면은 모두 예시입니다.</p>
+    </header>
+
+    <section>
+      <h2>1. 구성</h2>
+      <figure class="screenshot">
+        <img src="images/00-architecture.png" alt="Cloudflare 도메인·DNS, 공유기 포트포워딩, Synology NAS(acme.sh 인증서 갱신), Linux 서버(DDNS 스크립트) 구성도" loading="lazy" />
+        <figcaption>구성도: NAS와 Linux 서버가 Cloudflare API로 각각 TXT(인증서)와 A 레코드(유동 IP)를 관리</figcaption>
+      </figure>
+      <div class="table-wrap">
+        <table>
+          <tbody>
+            <tr><th>도메인·DNS</th><td>Cloudflare Registrar + Cloudflare DNS (<code>myhomelab.example</code>)</td></tr>
+            <tr><th>공유기</th><td>TP-Link AX3000, 외부 443 → NAS 5001 포트포워딩</td></tr>
+            <tr><th>NAS</th><td>Synology DSM (192.168.0.20) — 웹 관리, acme.sh, 작업 스케줄러, 국가 기반 방화벽</td></tr>
+            <tr><th>Linux 서버</th><td>Rocky / Alma (192.168.0.21) — DDNS 스크립트(cron 5분)</td></tr>
+            <tr><th>인증서</th><td>Let's Encrypt, <code>myhomelab.example</code> + <code>*.myhomelab.example</code> (ECC)</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>2. Cloudflare에서 도메인 등록</h2>
+      <p>Cloudflare Registrar는 도메인을 원가에 팔고, 등록하면 같은 계정에 DNS 영역(Zone)이 자동으로 만들어집니다. 다른 등록 업체에서 산 뒤 네임서버만 Cloudflare로 바꾸는 방법도 있지만, 한 곳에서 관리하면 갱신·DNS·API를 같이 다룰 수 있어 편합니다.</p>
+      <ol>
+        <li>Cloudflare 계정 생성 → 계정 이메일 인증, <strong>2단계 인증(2FA) 설정</strong> (도메인을 잃지 않으려면 필수)</li>
+        <li>대시보드 <strong>Domain Registration → Register Domains</strong>에서 원하는 이름 검색</li>
+        <li>등록 기간, <strong>자동 갱신</strong> 선택 → 등록자 연락처 입력 → 결제</li>
+        <li>등록 직후 등록자 이메일로 오는 <strong>연락처 확인 메일</strong>을 인증 (안 하면 도메인이 일시 정지될 수 있음)</li>
+        <li>WHOIS 공개 정보는 기본으로 가려짐(Redaction) — 등록자 연락처는 <strong>Manage Domain → Contacts</strong>에서 확인·수정</li>
+      </ol>
+      <div class="note">Cloudflare Registrar는 모든 확장자를 지원하지 않습니다(예: 국가 도메인 일부). 원하는 확장자가 없으면 다른 업체에서 등록하고 네임서버를 Cloudflare 것으로 바꾸면, 아래 DNS·API 부분은 똑같이 쓸 수 있습니다.</div>
+    </section>
+
+    <section>
+      <h2>3. DNS 레코드 설정 (대시보드)</h2>
+      <p><strong>DNS → Records → Add record</strong>에서 추가합니다.</p>
+      <figure class="screenshot">
+        <img src="images/01-dns-records.png" alt="myhomelab.example DNS 레코드 표: A 레코드 2개와 와일드카드 CNAME 은 DNS only, 인증서 발급 때만 생기는 _acme-challenge TXT" loading="lazy" />
+        <figcaption>사용 중인 레코드 구성 (예시)</figcaption>
+      </figure>
+      <h3>프록시(주황 구름)를 끈 이유</h3>
+      <ul>
+        <li>프록시를 켜면 도메인이 집 IP가 아니라 Cloudflare IP로 응답하고, 접속은 Cloudflare를 거쳐 들어옵니다. 집 IP를 숨기고 DDoS를 막아 주는 장점이 있습니다.</li>
+        <li>하지만 Cloudflare 프록시는 정해진 포트만 중계합니다. DSM 기본 포트(5000·5001)는 그 목록에 없어서 <strong>DNS only(회색 구름)</strong>로 두었습니다.</li>
+        <li>프록시를 켠 상태에서 "Always Use HTTPS"까지 켜면, 80 포트 요청이 NAS에 닿기 전에 Cloudflare에서 HTTPS로 넘겨져 인증서 HTTP 검증이 실패합니다. 인증서 문제를 볼 때 가장 먼저 확인할 부분입니다.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>4. API 토큰 발급 — Global API Key 대신</h2>
+      <div class="warn"><strong>처음에 겪은 문제</strong>: 처음에는 계정 전체 권한을 가진 <strong>Global API Key</strong>를 스크립트에 평문으로 넣었고, 이 키가 외부에 노출되었습니다. 이 키 하나로 계정의 모든 도메인과 설정을 바꿀 수 있어서, 즉시 <strong>재발급(Roll)</strong>하고 권한을 좁힌 <strong>API Token</strong>으로 바꿨습니다.</div>
+      <ol>
+        <li><strong>My Profile → API Tokens → Create Token</strong></li>
+        <li>템플릿 <strong>Edit zone DNS</strong> 선택</li>
+        <li>Permissions: <code>Zone · DNS · Edit</code> (조회를 위해 <code>Zone · Zone · Read</code> 추가)</li>
+        <li>Zone Resources: <strong>Specific zone → myhomelab.example</strong> (다른 도메인은 건드릴 수 없게)</li>
+        <li>(선택) Client IP Address Filtering에 집 공인 대역만 허용, TTL로 만료일 지정</li>
+        <li>발급된 토큰은 한 번만 보여 주므로 바로 서버의 설정 파일에 저장</li>
+      </ol>
+<pre><code># /root/.cloudflare.env   (chmod 600, root 만 읽기)
+CF_TOKEN="발급받은_API_토큰"
+ZONE_ID="Zone_ID"          # 대시보드 도메인 개요 화면 오른쪽 아래, 또는 API 로 조회
+
+chmod 600 /root/.cloudflare.env</code></pre>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th></th><th>Global API Key</th><th>API Token</th></tr></thead>
+          <tbody>
+            <tr><td>권한 범위</td><td>계정 전체 (모든 도메인, 설정, 결제 일부)</td><td>지정한 Zone의 지정한 권한만</td></tr>
+            <tr><td>헤더</td><td><code>X-Auth-Email</code> + <code>X-Auth-Key</code></td><td><code>Authorization: Bearer 토큰</code></td></tr>
+            <tr><td>acme.sh 변수</td><td><code>CF_Key</code> + <code>CF_Email</code></td><td><code>CF_Token</code> (+ <code>CF_Zone_ID</code>)</td></tr>
+            <tr><td>노출 시 피해</td><td>도메인 탈취까지 가능</td><td>해당 도메인 DNS 수정으로 제한, 토큰만 폐기하면 끝</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>5. API로 레코드 조회·추가·변경·삭제</h2>
+<pre><code>source /root/.cloudflare.env
+CF="https://api.cloudflare.com/client/v4"
+AUTH=(-H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json")
+
+# 토큰 정상 여부
+curl -s "${AUTH[@]}" "$CF/user/tokens/verify" | jq .result.status          # "active"
+
+# Zone ID 조회
+curl -s "${AUTH[@]}" "$CF/zones?name=myhomelab.example" | jq -r '.result[0].id'
+
+# 레코드 목록 / 특정 레코드 찾기
+curl -s "${AUTH[@]}" "$CF/zones/$ZONE_ID/dns_records" \
+  | jq -r '.result[] | [.id,.type,.name,.content,.proxied] | @tsv'
+RECORD_ID=$(curl -s "${AUTH[@]}" "$CF/zones/$ZONE_ID/dns_records?type=A&amp;name=www.myhomelab.example" \
+  | jq -r '.result[0].id')
+
+# 추가 (POST)  — ttl 1 = 자동
+curl -s -X POST "${AUTH[@]}" "$CF/zones/$ZONE_ID/dns_records" \
+  -d '{"type":"CNAME","name":"*","content":"myhomelab.example","ttl":1,"proxied":false}'
+
+# 일부만 변경 (PATCH) — 보낸 항목만 바뀜
+curl -s -X PATCH "${AUTH[@]}" "$CF/zones/$ZONE_ID/dns_records/$RECORD_ID" \
+  -d '{"content":"203.0.113.50"}'
+
+# 전체 교체 (PUT) — 빠진 항목은 기본값으로 돌아가므로 type·name·content 모두 보냄
+curl -s -X PUT "${AUTH[@]}" "$CF/zones/$ZONE_ID/dns_records/$RECORD_ID" \
+  -d '{"type":"A","name":"www.myhomelab.example","content":"203.0.113.50","ttl":1,"proxied":false}'
+
+# 삭제 (DELETE)
+curl -s -X DELETE "${AUTH[@]}" "$CF/zones/$ZONE_ID/dns_records/$RECORD_ID"</code></pre>
+      <figure class="screenshot">
+        <img src="images/02-cf-api.png" alt="Cloudflare API 로 토큰 확인, Zone ID 조회, 레코드 목록, CNAME 추가, A 레코드 변경 결과" loading="lazy" />
+        <figcaption>토큰 확인 → Zone ID → 목록 → 추가(POST) → 변경(PATCH), 응답의 <code>success: true</code> 확인 (예시 화면)</figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>6. DDNS 자동화 — 공인 IP가 바뀌면 A 레코드 수정</h2>
+      <p>가정용 회선은 공유기 재부팅이나 통신사 사정으로 공인 IP가 바뀝니다. Linux 서버에서 5분마다 현재 IP를 확인해, 레코드와 다르면 수정하고 레코드가 없으면 새로 추가합니다.</p>
+<pre><code>#!/bin/bash
+# /root/bin/cloud_dns.sh — 공인 IP 가 바뀌면 Cloudflare A 레코드 갱신 (없으면 추가)
+source /root/.cloudflare.env                 # CF_TOKEN, ZONE_ID
+CF="https://api.cloudflare.com/client/v4"
+RECORDS=("myhomelab.example" "www.myhomelab.example")
+TTL=1                                        # 1 = 자동
+PROXIED=false
+AUTH=(-H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json")
+log(){ echo "[$(date '+%F %T')] $*"; }
+
+# 현재 공인 IP (형식이 IP 가 아니면 중단 → 잘못된 값으로 레코드를 덮어쓰지 않음)
+CURRENT_IP=$(curl -s --max-time 10 https://api.ipify.org)
+[[ $CURRENT_IP =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { log "공인 IP 확인 실패: $CURRENT_IP"; exit 1; }
+log "현재 공인 IP: $CURRENT_IP"
+
+for NAME in "${RECORDS[@]}"; do
+  INFO=$(curl -s "${AUTH[@]}" "$CF/zones/$ZONE_ID/dns_records?type=A&amp;name=$NAME")
+  ID=$(jq -r '.result[0].id // empty' &lt;&lt;&lt; "$INFO")
+  OLD=$(jq -r '.result[0].content // empty' &lt;&lt;&lt; "$INFO")
+  BODY=$(jq -nc --arg n "$NAME" --arg ip "$CURRENT_IP" --argjson ttl $TTL --argjson p $PROXIED \
+           '{type:"A", name:$n, content:$ip, ttl:$ttl, proxied:$p}')
+
+  if [ -z "$ID" ]; then                        # 레코드 없음 → 추가
+    R=$(curl -s -X POST "${AUTH[@]}" "$CF/zones/$ZONE_ID/dns_records" -d "$BODY"); ACT="추가"
+  elif [ "$OLD" = "$CURRENT_IP" ]; then        # 같음 → 그대로
+    log "$NAME  변경 없음 ($OLD)"; continue
+  else                                         # 다름 → 교체
+    R=$(curl -s -X PUT "${AUTH[@]}" "$CF/zones/$ZONE_ID/dns_records/$ID" -d "$BODY"); ACT="업데이트 $OLD →"
+  fi
+
+  if [ "$(jq -r .success &lt;&lt;&lt; "$R")" = "true" ]; then
+    log "$NAME  $ACT $CURRENT_IP"
+  else
+    log "$NAME  실패: $(jq -c .errors &lt;&lt;&lt; "$R")"
+  fi
+done</code></pre>
+<pre><code>chmod 700 /root/bin/cloud_dns.sh
+dnf install -y jq
+
+# crontab -e
+*/5 * * * * /root/bin/cloud_dns.sh &gt;&gt; /var/log/cloud_dns.log 2&gt;&amp;1</code></pre>
+      <figure class="screenshot">
+        <img src="images/03-ddns-run.png" alt="cloud_dns.sh 로그: 평소에는 변경 없음, 공인 IP 가 바뀐 시점에 두 레코드 업데이트, dig 로 새 IP 확인" loading="lazy" />
+        <figcaption>평소엔 "변경 없음", IP가 바뀐 5분 안에 두 레코드 업데이트 → 외부 DNS에서 새 IP 확인 (예시 화면)</figcaption>
+      </figure>
+      <div class="note">처음 스크립트는 레코드가 있을 때 수정만 했고, jq가 없을 때를 위한 grep 대체 코드가 함께 있었습니다. 지금은 jq를 필수로 두고, <strong>레코드가 없으면 추가(POST)</strong>까지 하도록 정리했습니다.</div>
+    </section>
+
+    <section>
+      <h2>7. 인증서: HTTP-01이 실패한 이유</h2>
+      <p>DSM 제어판의 Let's Encrypt 발급은 <strong>HTTP-01 검증</strong>을 씁니다. Let's Encrypt가 <code>http://도메인/.well-known/acme-challenge/…</code>를 직접 열어 보고 정해진 값이 나오는지 확인하는 방식입니다.</p>
+      <figure class="screenshot">
+        <img src="images/04-http01-fail.png" alt="80 포트 검증 경로 요청이 302 로 DSM 로그인 페이지로 넘어가 HTTP-01 검증 실패" loading="lazy" />
+        <figcaption>검증 경로까지 모두 302로 로그인 페이지로 넘어가 검증 실패 (예시 화면)</figcaption>
+      </figure>
+      <ul>
+        <li>DSM이 80 포트로 들어온 <strong>모든 경로</strong>를 로그인 페이지로 302 리디렉션해서, HTTPS 자동 리디렉션을 끄고 방화벽을 꺼도 해결되지 않았습니다.</li>
+        <li>통신사에서 80 포트를 막는 경우에도 HTTP-01은 쓸 수 없습니다.</li>
+        <li>그래서 80 포트를 아예 쓰지 않는 <strong>DNS-01 검증</strong>으로 바꿨습니다. 도메인 DNS에 <code>_acme-challenge</code> TXT 레코드를 올려 소유를 증명하는 방식이라, Cloudflare API로 자동화할 수 있고 <strong>와일드카드 인증서</strong>(<code>*.myhomelab.example</code>)도 받을 수 있습니다.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>8. Synology에 acme.sh 설치·발급 (DNS-01)</h2>
+<pre><code># DSM: 제어판 → 터미널 및 SNMP → SSH 서비스 활성화 → 관리자 계정으로 접속 후
+sudo -i
+
+# acme.sh 설치 (DSM 에는 crontab 이 없어 스크립트 파일만 받아 사용)
+cd /usr/local/bin
+wget https://raw.githubusercontent.com/acmesh-official/acme.sh/master/acme.sh
+chmod 755 acme.sh
+mkdir -p /root/.acme.sh
+acme.sh --set-default-ca --server letsencrypt     # 기본 CA 를 Let's Encrypt 로
+
+# Cloudflare 토큰 (4번에서 만든 DNS 편집 토큰)
+export CF_Token="발급받은_API_토큰"
+export CF_Zone_ID="Zone_ID"
+
+# 첫 발급 — 도메인 + 와일드카드
+acme.sh --issue --dns dns_cf -d myhomelab.example -d '*.myhomelab.example' --keylength ec-256</code></pre>
+      <figure class="screenshot">
+        <img src="images/05-acme-issue.png" alt="acme.sh 가 Cloudflare 에 TXT 레코드 추가, 두 도메인 검증 성공, TXT 삭제 후 인증서 발급" loading="lazy" />
+        <figcaption>TXT 자동 추가 → 검증 성공 → TXT 자동 삭제 → 발급 (예시 화면)</figcaption>
+      </figure>
+      <ul>
+        <li>첫 발급에 성공하면 acme.sh가 토큰을 <code>/root/.acme.sh/account.conf</code>에 저장해 둡니다. 그래서 <strong>갱신 스크립트에는 토큰을 다시 넣지 않아도 됩니다.</strong> 이 파일 권한도 <code>600</code>인지 확인합니다.</li>
+        <li>인증서 파일은 <code>/root/.acme.sh/myhomelab.example_ecc/</code>에 생깁니다 (<code>.cer</code>, <code>.key</code>, <code>ca.cer</code>, <code>fullchain.cer</code>).</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>9. DSM 인증서 자동 적용 스크립트</h2>
+      <p>DSM은 인증서를 <code>/usr/syno/etc/certificate/_archive/&lt;ID&gt;/</code> 폴더에 두고, <strong>기본 인증서로 지정된 폴더 ID를 <code>_archive/DEFAULT</code> 파일</strong>에 적어 둡니다. 이 파일을 읽어 그 폴더의 내용만 덮어쓰면 GUI에서 "가져오기"를 할 필요가 없습니다. 역방향 프록시를 쓰면 프록시용 사본 폴더도 같이 갱신합니다.</p>
+<pre><code>#!/bin/bash
+# /root/renew_cert.sh — DSM 작업 스케줄러에서 root 로 주 1회 실행
+DOMAIN="myhomelab.example"
+ACME=/usr/local/bin/acme.sh
+CERT_DIR="/root/.acme.sh/${DOMAIN}_ecc"
+ARCHIVE=/usr/syno/etc/certificate/_archive
+LOG=/var/log/cert_renew.log
+log(){ echo "[$(date '+%F %T')] $*" &gt;&gt; "$LOG"; }
+
+# 1) 갱신 시기일 때만 갱신 (만료 30일 전부터). 토큰은 account.conf 에 저장되어 있음
+"$ACME" --renew -d "$DOMAIN" --ecc --home /root/.acme.sh
+rc=$?
+if [ $rc -eq 2 ]; then log "갱신 시기 아님 (acme.sh exit 2) - 적용 생략"; exit 0; fi
+if [ $rc -ne 0 ]; then log "갱신 실패 (acme.sh exit $rc)"; exit 1; fi
+
+copy_cert() {                       # $1 = 대상 폴더
+  cp -f "$CERT_DIR/$DOMAIN.cer"   "$1/cert.pem"
+  cp -f "$CERT_DIR/ca.cer"        "$1/chain.pem"
+  cp -f "$CERT_DIR/fullchain.cer" "$1/fullchain.pem"
+  cp -f "$CERT_DIR/$DOMAIN.key"   "$1/privkey.pem"
+}
+
+# 2) DSM 기본 인증서 폴더에 적용
+DEFAULT_ID=$(cat "$ARCHIVE/DEFAULT")
+copy_cert "$ARCHIVE/$DEFAULT_ID"
+
+# 3) 역방향 프록시용 사본에도 적용 (없으면 건너뜀)
+n=0
+for d in /usr/syno/etc/certificate/ReverseProxy/*/; do
+  [ -d "$d" ] || continue
+  copy_cert "$d"; n=$((n+1))
+done
+
+# 4) 웹 서버 재로드
+synosystemctl reload nginx
+log "갱신 완료 → DSM 기본 인증서($DEFAULT_ID) 와 역방향 프록시 ${n}개에 적용, nginx 재로드"</code></pre>
+<pre><code>chmod 700 /root/renew_cert.sh
+/root/renew_cert.sh          # 첫 테스트 (발급 직후라면 "갱신 시기 아님" 이 정상)
+/usr/local/bin/acme.sh --renew -d myhomelab.example --ecc --force   # 강제 갱신으로 적용까지 시험할 때만</code></pre>
+      <h3>작업 스케줄러 등록</h3>
+      <ol>
+        <li>제어판 → <strong>작업 스케줄러 → 생성 → 예약된 작업 → 사용자 정의 스크립트</strong></li>
+        <li>일반: 작업 이름 <code>SSL_Renew</code>, 사용자 <strong>root</strong></li>
+        <li>스케줄: <strong>매주</strong> 일요일 03:00</li>
+        <li>작업 설정: 사용자 정의 스크립트 <code>/root/renew_cert.sh</code>, (선택) 실행 결과 메일 받기</li>
+      </ol>
+      <figure class="screenshot">
+        <img src="images/06-renew-check.png" alt="갱신 로그: 갱신 시기가 아닐 때는 생략, 갱신 시 DSM 기본 인증서와 역방향 프록시에 적용, openssl 로 발급자와 만료일 확인" loading="lazy" />
+        <figcaption>평소엔 "갱신 시기 아님", 만료 30일 전 실행 때 갱신·적용 → 외부에서 발급자와 만료일 확인 (예시 화면)</figcaption>
+      </figure>
+      <div class="note">
+        <strong>처음 스크립트에서 바꾼 점</strong>
+        <ul>
+          <li>처음에는 매달 <code>--issue --force</code>로 <strong>무조건 새로 발급</strong>했습니다. 동작은 했지만 필요 없는 발급이 쌓이고 Let's Encrypt 발급 횟수 제한에 가까워질 수 있어서, <code>--renew</code>로 바꾸고 주 1회 확인하게 했습니다. 갱신 시기가 아니면 acme.sh가 <code>exit 2</code>를 돌려주므로 그때는 적용을 건너뜁니다.</li>
+          <li>Cloudflare 키를 스크립트에 평문으로 넣지 않습니다 (account.conf에 저장된 토큰 사용).</li>
+          <li>최초 1회는 DSM <strong>제어판 → 보안 → 인증서 → 설정</strong>에서 각 서비스가 이 기본 인증서를 쓰도록 연결되어 있는지 확인했습니다. 이후로는 GUI 작업이 없습니다.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <h2>10. 접근 제어 — 국가 기반 방화벽</h2>
+      <p>공유기(TP-Link AX3000)의 포트포워딩에는 출발지 IP를 제한하는 기능이 없어서, NAS의 방화벽에서 막았습니다.</p>
+<pre><code>DSM 제어판 → 보안 → 방화벽 → 규칙 편집 (위에서부터 처음 맞는 규칙 적용)
+  1. 허용 : 출발지 IP  192.168.0.0/24 (집 내부 LAN)     모든 포트
+  2. 허용 : 위치        대한민국                          모든 포트
+  3. 거부 : 모두                                         모든 포트</code></pre>
+      <ul>
+        <li>외부 여러 나라에서 접속을 시험해 주는 사이트로 확인했을 때 해외 노드는 대부분 차단되었습니다.</li>
+        <li>한 해외 노드만 접속이 되었는데, GeoIP 데이터베이스가 그 IP를 국내로 잘못 분류한 경우였습니다. 국가 기반 차단은 GeoIP 정확도에 의존하므로 <strong>강력한 비밀번호, 2단계 인증, 자동 차단(로그인 실패 시)</strong>을 함께 켭니다.</li>
+        <li>집 안에서 도메인으로 접속이 안 되면 공유기가 NAT 루프백(자기 공인 IP로 되돌아오는 접속)을 지원하지 않는 경우입니다. 휴대폰 데이터망으로 시험하면 구분할 수 있습니다.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>11. 트러블슈팅</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>증상</th><th>원인 및 해결</th></tr></thead>
+          <tbody>
+            <tr><td>DSM Let's Encrypt 발급 실패 (302)</td><td>DSM이 80 포트 요청을 로그인 페이지로 넘김 → DNS-01(acme.sh)로 전환</td></tr>
+            <tr><td>HTTP 검증이 DSM에 도달조차 안 함</td><td>Cloudflare 프록시 + Always Use HTTPS. 레코드를 DNS only로</td></tr>
+            <tr><td>acme.sh 인증 오류</td><td>토큰과 Global Key 변수를 섞어 씀. 토큰은 <code>CF_Token</code>, Global Key는 <code>CF_Key</code> + <code>CF_Email</code></td></tr>
+            <tr><td>acme.sh가 Zone을 못 찾음</td><td>토큰이 특정 Zone으로 제한된 경우 <code>CF_Zone_ID</code> 지정 또는 토큰에 Zone Read 권한 추가</td></tr>
+            <tr><td>스크립트는 성공인데 브라우저에 옛 인증서</td><td>nginx 재로드 누락, 또는 서비스가 다른 인증서에 연결됨(제어판 → 인증서 → 설정 확인). 브라우저 캐시 → 강력 새로고침</td></tr>
+            <tr><td>DSM 업데이트 후 갱신 안 됨</td><td>업데이트로 <code>/usr/local/bin/acme.sh</code>나 작업 설정이 바뀌었는지 확인, 로그(<code>/var/log/cert_renew.log</code>) 점검</td></tr>
+            <tr><td>DDNS가 엉뚱한 IP로 수정</td><td>IP 확인 사이트가 오류 페이지를 돌려줌 → IP 형식 검사 후에만 수정 (스크립트에 반영)</td></tr>
+            <tr><td>집 안에서만 접속 안 됨</td><td>공유기 NAT 루프백 미지원 → 내부에서는 내부 IP나 내부 DNS로 접속</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>황태운 · 시스템 인프라 운영 관리자</p>
+  </footer>
+</body>
+</html>

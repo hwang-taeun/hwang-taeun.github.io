@@ -1,0 +1,325 @@
+---
+title: 채용공고 모니터링 크롤러 (mitmproxy API 분석 · 신규 공고 메일 알림)
+short_title: 채용공고 모니터링 크롤러
+type: project
+anchor: recruit-crawler
+order: 140
+featured: true
+summary: mitmproxy로 채용 사이트 3곳의 내부 API를 분석해 재현, 신규 공고만 골라 메일로 알림
+problem: >-
+  관심 직무(인프라·IT 운영)의 채용공고를 여러 회사 사이트에서 매일 직접 확인해야 했고,
+  각 사이트 화면은 JavaScript로 목록을 불러와 HTML을 긁는 방식으로는 공고를 가져올 수 없었습니다.
+action: >-
+  mitmproxy(mitmdump)로 브라우저 트래픽을 가로채 각 사이트가 내부적으로 호출하는 POST API와 요청 형식
+  (form 전송, JSON, 세션 쿠키 + 이중 URL 인코딩)을 찾아 Python requests로 재현했습니다.
+  이전 공고 ID와 비교해 신규만 골라 메일로 보내고, cron과 대화형 메뉴로 실행하게 했습니다.
+result: >-
+  매일 아침 신규 공고만 한 통의 메일로 받아 확인 시간이 사라졌고,
+  사이트 구조가 바뀌어도 같은 분석 절차로 빠르게 다시 맞출 수 있게 되었습니다.
+skill_group: 자동화 스크립트
+skill_order: 50
+skill: mitmproxy로 웹 내부 API 분석 → Python 크롤러 재현, 신규 항목 감지·메일 알림
+link_label: 채용공고 크롤러 상세
+---
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>채용공고 모니터링 크롤러 — 황태운</title>
+  <meta name="description" content="mitmproxy·mitmdump로 채용 사이트의 내부 API를 분석하고 Python requests로 재현해, 신규 채용공고만 메일로 알리는 크롤러를 만든 과정" />
+  <meta name="theme-color" content="#1a73e8" />
+  <link rel="stylesheet" href="../../assets/style.css" />
+  <style>
+    .table-wrap { overflow-x: auto; margin: 0.6rem 0 1rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+    th, td { border: 1px solid var(--border); padding: 0.5rem 0.7rem; text-align: left; vertical-align: top; }
+    th { background: var(--accent-soft); color: var(--accent); font-weight: 700; white-space: nowrap; }
+    .note { border-left: 4px solid var(--accent); background: var(--accent-soft); padding: 0.7rem 1rem; border-radius: 0 8px 8px 0; margin: 0.8rem 0; }
+    .warn { border-left: 4px solid #d93025; background: rgba(217,48,37,0.08); padding: 0.7rem 1rem; border-radius: 0 8px 8px 0; margin: 0.8rem 0; }
+    .screenshot { margin: 0.8rem 0 1.2rem; }
+    .screenshot img { display: block; max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 8px; }
+    .screenshot figcaption { margin-top: 0.4rem; color: var(--muted); font-size: 0.88rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <a href="../../index.html" class="back-link">← 메인으로</a>
+
+    <header>
+      <p class="tagline">프로젝트 · 자동화 스크립트</p>
+      <h1>채용공고 모니터링 크롤러</h1>
+      <p class="lead">관심 직무의 채용공고를 회사 사이트 세 곳에서 매일 직접 확인하던 일을 자동화했습니다. 화면(HTML)을 긁지 않고, <strong>mitmproxy로 브라우저 트래픽을 가로채 사이트가 내부적으로 부르는 API를 찾아</strong> 같은 요청을 Python으로 재현했습니다. 이전에 본 공고와 비교해 새 공고만 메일로 보냅니다.</p>
+      <p class="note">회사명은 A·B·C 회사로, 도메인과 API 경로·필드명은 예시 값(<code>*.example</code>)으로 바꿨습니다. 화면은 모두 예시입니다.</p>
+    </header>
+
+    <section>
+      <h2>1. 구성</h2>
+      <figure class="screenshot">
+        <img src="images/00-architecture.png" alt="WSL AlmaLinux 에서 cron 으로 크롤러 실행, A·B·C 회사 API 호출, 이전 공고 ID 비교 후 신규만 메일 발송. 분석 단계는 mitmproxy 사용" loading="lazy" />
+        <figcaption>구성도: 분석은 처음 한 번(사이트가 바뀌면 다시), 수집은 매일 자동</figcaption>
+      </figure>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>대상</th><th>API 형식</th><th>특징</th></tr></thead>
+          <tbody>
+            <tr><td>A 회사</td><td>form POST (<code>x-www-form-urlencoded</code>)</td><td>직무코드 하나씩만 조회 가능 → 관심 직무코드 20개를 반복 호출</td></tr>
+            <tr><td>B 회사</td><td>JSON POST, 별도 API 서버</td><td>직군·하위직무 코드 목록으로 한 번에 조회, 사이트 전용 헤더 필요</td></tr>
+            <tr><td>C 회사</td><td>form POST 안에 JSON (이중 URL 인코딩)</td><td>페이지 접속으로 세션 쿠키를 먼저 받아야 함, 마감 공고도 섞여 옴</td></tr>
+          </tbody>
+        </table>
+      </div>
+<pre><code>Recruit_Crawler/
+├── recruit_menu.sh          # 대화형 실행 메뉴
+├── run_all_search.py        # 전체 통합 검색 + 메일 1통
+├── A_search.py              # 회사별 단독 실행 (각각 메일)
+├── B_search.py
+├── C_search.py
+├── send_recruit_mail.py     # 메일 발송 모듈
+├── A_job_roles              # A 회사 관심 직무코드 목록 (JSON)
+└── .a_prev_posts.json ...   # 회사별 이전 공고 ID (자동 생성)</code></pre>
+    </section>
+
+    <section>
+      <h2>2. 실행 환경 (WSL · AlmaLinux 10)</h2>
+      <p>Windows 업무 PC의 WSL에 AlmaLinux 10을 올려 실행했습니다. 사내망의 <strong>SSL 검사 장비</strong>가 HTTPS 인증서를 자체 인증서로 바꿔 끼우기 때문에, 처음에는 dnf와 pip 모두 인증서 오류로 실패했습니다.</p>
+<pre><code># 증상
+Curl error (60): SSL certificate problem: self-signed certificate in certificate chain
+
+# 적용한 조치: 저장소 SSL 검증 해제 (사내망 한정)
+echo 'sslverify=false' | sudo tee -a /etc/dnf/dnf.conf
+sudo dnf install -y python3-requests
+
+# pip 를 쓸 경우
+pip install requests --trusted-host pypi.org --trusted-host files.pythonhosted.org</code></pre>
+      <div class="note"><strong>더 나은 방법</strong>: 검증을 끄는 대신 사내 SSL 검사 장비의 루트 인증서를 신뢰 목록에 등록하면 dnf, pip, Python requests가 모두 정상 검증합니다.
+<pre><code>sudo cp corp-root-ca.crt /etc/pki/ca-trust/source/anchors/
+sudo update-ca-trust
+export REQUESTS_CA_BUNDLE=/etc/pki/tls/certs/ca-bundle.crt   # requests 도 시스템 CA 사용</code></pre></div>
+    </section>
+
+    <section>
+      <h2>3. 페이지 분석: 왜 HTML이 아니라 API인가</h2>
+      <p>채용 페이지를 <code>curl</code>로 받아 보면 공고 목록이 없습니다. 화면 틀(HTML)만 먼저 오고, 브라우저의 JavaScript가 <strong>뒤에서 API를 따로 호출해 목록을 채우기</strong> 때문입니다. 그래서 그 API 요청을 찾아 똑같이 보내면, HTML 파싱 없이 깔끔한 JSON으로 공고를 받을 수 있습니다.</p>
+      <h3>도구: mitmproxy / mitmdump</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>도구</th><th>역할</th></tr></thead>
+          <tbody>
+            <tr><td><strong>mitmproxy</strong></td><td>브라우저와 사이트 사이에 끼는 프록시. HTTPS까지 풀어서 요청·응답을 화면에서 하나씩 열어 봄</td></tr>
+            <tr><td><strong>mitmdump</strong></td><td>mitmproxy의 화면 없는 버전. 트래픽을 터미널에 흘려 보거나 <strong>파일로 저장(dump)</strong>하고, 저장한 파일을 다시 읽어 필터링</td></tr>
+            <tr><td>mitmweb</td><td>같은 기능을 웹 화면(8081)으로 제공</td></tr>
+            <tr><td>FoxyProxy (Chrome 확장)</td><td>분석할 사이트만 프록시를 거치게 브라우저 설정을 빠르게 전환</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>브라우저 개발자 도구(Network 탭)로도 볼 수 있지만, mitmproxy는 <strong>요청을 파일로 남겨 두고 나중에 다시 비교</strong>할 수 있고, 리눅스 터미널에서 필터와 재현까지 이어서 할 수 있어 선택했습니다.</p>
+      <h3>준비</h3>
+<pre><code># 설치 (WSL)
+pip install mitmproxy
+
+# 프록시 실행 — 사내 SSL 검사 장비 때문에 상위 인증서 검증은 끔
+mitmproxy --listen-port 8080 --ssl-insecure
+
+# 브라우저 쪽
+#  1) FoxyProxy 에 127.0.0.1:8080 프록시 추가 → 분석할 때만 켬
+#  2) 프록시를 켠 상태로 http://mitm.it 접속 → mitmproxy 인증서 설치
+#     (설치하지 않으면 HTTPS 사이트가 인증서 오류로 열리지 않음)</code></pre>
+      <div class="warn">mitmproxy 인증서를 설치한 브라우저는 모든 HTTPS를 mitmproxy가 풀어서 볼 수 있습니다. 분석이 끝나면 FoxyProxy를 끄고, 필요 없으면 인증서도 삭제합니다.</div>
+    </section>
+
+    <section>
+      <h2>4. 분석 절차</h2>
+      <ol>
+        <li><strong>대상 페이지 열기</strong>: 프록시를 켠 브라우저로 채용 페이지 접속</li>
+        <li><strong>화면 조작</strong>: 직무 필터 선택, 페이지 넘기기, 검색 등 목록이 바뀌는 동작을 함</li>
+        <li><strong>요청 찾기</strong>: 동작 직후에 생긴 요청 중 <code>POST</code>이면서 응답이 <code>application/json</code>인 것 찾기 (이미지·CSS·JS는 무시)</li>
+        <li><strong>요청 해부</strong>: URL, 필수 헤더, 본문 형식(form·JSON), 화면 조작에 따라 바뀌는 값(직무코드 등) 확인</li>
+        <li><strong>응답 해부</strong>: 공고 목록 위치, 공고 고유번호(신규 판별 키), 제목·회사·마감일 필드 확인</li>
+        <li><strong>재현</strong>: curl로 같은 요청을 보내 같은 응답이 오는지 확인 → 헤더를 하나씩 빼 보며 꼭 필요한 것만 남김</li>
+        <li><strong>코드화</strong>: Python requests로 옮기고 재시도·딜레이 추가</li>
+      </ol>
+      <figure class="screenshot">
+        <img src="images/01-mitmproxy-flows.png" alt="mitmproxy 흐름 목록에서 세 회사의 공고 목록 API POST 요청 확인" loading="lazy" />
+        <figcaption>화면 조작 직후 생긴 흐름 중 JSON을 돌려주는 POST 3개가 공고 목록 API (예시 화면)</figcaption>
+      </figure>
+      <h3>mitmdump로 저장하고 다시 보기</h3>
+      <p>화면에서 하나씩 보는 대신 mitmdump로 필요한 요청만 파일에 저장해 두면, 나중에 사이트가 바뀌었을 때 <strong>예전 요청과 새 요청을 비교</strong>할 수 있습니다.</p>
+<pre><code># POST + JSON 응답만 저장
+mitmdump --listen-port 8080 --ssl-insecure -w recruit.flows '~m POST &amp; ~t json'
+
+# 저장한 파일에서 특정 도메인만 상세 출력 (-n: 프록시를 띄우지 않고 읽기만)
+mitmdump -nr recruit.flows --flow-detail 3 '~d b-recruit.example'
+
+# 자주 쓰는 필터
+#   ~m POST     메서드          ~d 도메인     ~u URL 일부
+#   ~t json     Content-Type    ~c 200 응답코드   !~a  정적 파일 제외</code></pre>
+      <figure class="screenshot">
+        <img src="images/06-mitmdump-replay.png" alt="mitmdump 로 POST JSON 요청만 저장, 저장 파일에서 B 회사 요청 상세 출력, curl 로 재현해 같은 결과 확인" loading="lazy" />
+        <figcaption>저장 → 다시 읽어 요청 형식 확인 → curl로 재현해 같은 결과(공고 4건)가 오면 분석 완료 (예시 화면)</figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>5. 사이트별 분석 결과</h2>
+
+      <h3>A 회사 — form POST, 직무코드 반복</h3>
+      <figure class="screenshot">
+        <img src="images/02-site-a-request.png" alt="A 회사 공고 목록 API: form 본문의 jobRole 값이 직무 필터에 따라 바뀌고, 응답의 jobNoticeNo 가 공고 고유번호" loading="lazy" />
+        <figcaption>직무 필터를 바꿀 때마다 <code>jobRole</code> 값만 바뀜 → 공고 고유번호는 <code>jobNoticeNo</code> (예시 화면)</figcaption>
+      </figure>
+      <ul>
+        <li>한 번에 직무코드 하나만 보낼 수 있어서, 화면에서 관심 직무를 하나씩 눌러 보며 <strong>코드 값을 모아 <code>A_job_roles</code> 파일로</strong> 정리했습니다 (Cloud/Infra, IT 운영, IT 보안 등 20개).</li>
+        <li>코드 목록을 파일로 뺐기 때문에 직무를 추가·삭제할 때 코드는 고치지 않아도 됩니다.</li>
+      </ul>
+<pre><code>url = "https://www.a-careers.example/recruit/list"
+headers = {
+    "Content-Type": "application/x-www-form-urlencoded",
+    "X-Requested-With": "XMLHttpRequest",
+    "Referer": "https://www.a-careers.example/recruit",
+}
+for code, name in job_roles.items():          # A_job_roles: {"154": "Cloud/Infra", ...}
+    data = {"sort": 2, "jobRole": code, "searchText": "", "corpCode": "",
+            "recruitType": "", "workingType": "", "workingRegion": ""}
+    res = requests.post(url, headers=headers, data=data, timeout=10)
+    result = res.json()
+    if result["totalCount"] &gt; 0:
+        all_results.extend(result["list"])     # jobNoticeNo, title, corpName, end
+    time.sleep(1)                              # 사이트 부담을 줄이려고 1초 간격</code></pre>
+
+      <h3>B 회사 — JSON POST, 별도 API 서버</h3>
+      <figure class="screenshot">
+        <img src="images/03-site-b-request.png" alt="B 회사 공고 목록 API: JSON 본문에 직군·하위직무 코드 목록, 사이트 전용 X-Menu-Path 헤더" loading="lazy" />
+        <figcaption>화면 주소와 다른 API 서버(<code>api.</code>)로 JSON을 보냄, 사이트 전용 헤더 확인 (예시 화면)</figcaption>
+      </figure>
+      <ul>
+        <li>화면 도메인과 API 도메인이 달라 브라우저가 먼저 <code>OPTIONS</code>(CORS 사전 요청)를 보냅니다. 스크립트는 브라우저가 아니라서 OPTIONS 없이 POST만 보내면 됩니다.</li>
+        <li>직군 코드(IT)와 하위 직무 코드 목록을 한 번에 보내므로 요청 한 번으로 끝납니다.</li>
+        <li>브라우저가 보낸 헤더 중 사이트 전용 헤더(<code>X-Menu-Path</code>)와 <code>Origin</code>, <code>Referer</code>를 그대로 함께 보냅니다.</li>
+      </ul>
+<pre><code>url = "https://api.b-recruit.example/portal/api/recruit/search"
+headers = {
+    "Content-Type": "application/json",
+    "X-Menu-Path": "/apply/recruit",
+    "Origin": "https://www.b-recruit.example",
+    "Referer": "https://www.b-recruit.example/",
+}
+data = {"catSeqList": [29], "subCatSeqList": [234, 56, 55, 54, 53],
+        "langCd": "ko", "page": 0, "size": 20, "searchText": ""}
+res = requests.post(url, headers=headers, json=data, timeout=10)   # json= → 자동으로 JSON 본문
+posts = res.json()["data"]["list"]          # rcrtSeq, rcrtNm, corpNm, acptEndDttm</code></pre>
+
+      <h3>C 회사 — 세션 쿠키 + 이중 URL 인코딩</h3>
+      <figure class="screenshot">
+        <img src="images/04-site-c-request.png" alt="C 회사: 페이지 접속 시 세션 쿠키 발급, API 본문 DATA_JSON 이 두 번 URL 인코딩된 JSON, 응답에 마감 공고 포함" loading="lazy" />
+        <figcaption>세션 쿠키 필요 / 본문의 <code>%25</code>를 보고 이중 인코딩임을 확인 / 마감 공고도 섞여 옴 (예시 화면)</figcaption>
+      </figure>
+      <ul>
+        <li><strong>세션 쿠키</strong>: 브라우저 흐름을 보면 목록 페이지에 접속할 때 <code>JSESSIONID</code> 쿠키를 받고, API 호출에 그 쿠키를 함께 보내고 있었습니다. <code>requests.Session()</code>으로 페이지를 먼저 열어 쿠키를 받은 뒤 API를 호출합니다.</li>
+        <li><strong>이중 URL 인코딩</strong>: 본문이 <code>DATA_JSON=%257B%2522...</code> 형태였습니다. <code>%25</code>는 <code>%</code> 자체를 인코딩한 것이라 한 번 풀면 <code>%7B%22...</code>, 두 번 풀어야 <code>{"...</code>가 됩니다. 사이트 프레임워크(AngularJS 계열)가 JSON을 인코딩한 뒤 form 전송 과정에서 한 번 더 인코딩하는 구조라, 스크립트도 <strong>두 번 인코딩</strong>해서 보냅니다.</li>
+        <li><strong>마감 공고 필터</strong>: 응답에 마감된 공고도 함께 와서, 마감일이 지금보다 뒤인 것만 남깁니다.</li>
+      </ul>
+<pre><code>BASE = "https://www.c-company.example"
+session = requests.Session()
+session.get(f"{BASE}/recruit/notice.do", timeout=15)        # 1) 세션 쿠키 받기
+
+payload = {"col_nm": "title", "col_val": "", "board_no": "15",
+           "paging": {"use": True, "pageNo": 1, "pageSize": 10}}
+raw     = json.dumps(payload, separators=(",", ":"))
+encoded = urllib.parse.quote(urllib.parse.quote(raw))      # 2) 이중 URL 인코딩
+res = session.post(f"{BASE}/board/list.do", data=f"DATA_JSON={encoded}",
+                   headers={"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                            "X-Requested-With": "XMLHttpRequest",
+                            "Referer": f"{BASE}/recruit/notice.do"}, timeout=15)
+result = res.json()
+if result.get("RESULT") != "RESULT_SUCCESS":
+    raise Exception(result.get("RESULT_MSG"))
+
+def is_open(end):                                           # 3) 마감 공고 제외
+    try:
+        return datetime.strptime(end, "%Y-%m-%d %H:%M") &gt; datetime.now()
+    except ValueError:
+        return True
+posts = [p for p in result["OUT_DATA"] if is_open(p.get("APPLY_END_DT", ""))]</code></pre>
+    </section>
+
+    <section>
+      <h2>6. 신규 공고 판별과 메일</h2>
+      <p>회사마다 마지막으로 본 공고 고유번호 목록을 숨김 파일(<code>.a_prev_posts.json</code> 등)에 저장하고, 이번 결과와의 <strong>차집합</strong>으로 신규를 찾습니다.</p>
+<pre><code>prev_ids    = load_prev()                                   # 지난번 공고 ID 집합
+current_ids = {str(p["jobNoticeNo"]) for p in all_results}
+new_ids     = current_ids - prev_ids                        # 이번에 처음 보는 공고
+new_posts   = [p for p in all_results if str(p["jobNoticeNo"]) in new_ids]
+save_prev(current_ids)                                      # 다음 비교용으로 저장</code></pre>
+      <ul>
+        <li>처음 실행하면 이전 파일이 없어 현재 공고 전체가 신규로 잡힙니다. 두 번째 실행부터 진짜 새 공고만 알립니다.</li>
+        <li>마감되어 목록에서 빠진 공고는 저장 목록에서도 빠지므로 파일이 계속 커지지 않습니다.</li>
+        <li><code>run_all_search.py</code>는 세 회사 결과를 모아 <strong>메일 한 통</strong>으로, 회사별 스크립트는 각각 메일로 보냅니다. 신규가 없으면 메일을 보내지 않습니다.</li>
+      </ul>
+      <figure class="screenshot">
+        <img src="images/05-run-output.png" alt="run_all_search.py 실행: 회사별 전체·신규 건수, 통합 메일 발송, 두 번째 실행은 신규 없음으로 발송 생략" loading="lazy" />
+        <figcaption>첫 실행은 신규 3건 메일 발송, 바로 다시 실행하면 신규 0건으로 발송 생략 (예시 화면)</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/07-mail.png" alt="회사별로 묶인 신규 채용공고 통합 알림 메일" loading="lazy" />
+        <figcaption>받은 메일: 회사별로 묶어 제목·회사·마감일 표시 (예시 화면)</figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>7. 실행 방법</h2>
+<pre><code># 대화형 메뉴
+./recruit_menu.sh
+#   1) 전체 통합 검색 + 메일 발송
+#   2) A 회사 검색   3) B 회사 검색   4) C 회사 검색
+#   5) 전체 개별 검색 (각각 메일)
+#   0) 종료
+
+# 직접 실행
+python3 run_all_search.py</code></pre>
+      <h3>WSL에서 cron 자동 실행</h3>
+      <p>WSL은 기본적으로 systemd와 cron이 돌지 않아서, crontab만 등록하면 실행되지 않습니다.</p>
+<pre><code># /etc/wsl.conf — WSL 에서 systemd 사용
+[boot]
+systemd=true
+
+# Windows PowerShell 에서 WSL 재시작
+wsl --shutdown
+
+# WSL 안에서 cron 실행
+sudo dnf install -y cronie
+sudo systemctl enable --now crond
+
+# crontab -e — 평일 오전 9시
+0 9 * * 1-5 cd $HOME/Recruit_Crawler &amp;&amp; python3 run_all_search.py &gt;&gt; $HOME/Recruit_Crawler/logs/recruit.log 2&gt;&amp;1</code></pre>
+      <ul>
+        <li>일반 사용자 crontab에서 <code>/var/log</code>에는 쓸 권한이 없어서 로그는 홈 아래 <code>logs/</code>에 남깁니다.</li>
+        <li>WSL은 Windows에서 창을 모두 닫으면 잠시 뒤 종료됩니다. PC가 켜져 있어도 WSL이 꺼져 있으면 cron이 돌지 않으므로, Windows 작업 스케줄러에 <code>wsl -d AlmaLinux-10 -u 사용자 -- python3 ~/Recruit_Crawler/run_all_search.py</code>를 등록하는 방법도 있습니다.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>8. 운영하며 보완한 점·보완할 점</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>항목</th><th>문제</th><th>보완</th></tr></thead>
+          <tbody>
+            <tr><td>메일 계정 정보</td><td>SMTP 비밀번호가 스크립트에 그대로 들어 있음 → Git 저장소나 공유 폴더로 퍼지면 노출</td><td>별도 설정 파일(<code>~/.recruit.env</code>, 권한 600)이나 환경변수로 분리, <code>.gitignore</code>에 추가</td></tr>
+            <tr><td>일부 요청 실패 시 오탐</td><td>A 회사 직무코드 중 하나가 3번 모두 실패해도 나머지 결과로 이전 목록을 덮어씀 → 다음 실행 때 그 공고들이 "신규"로 다시 알림</td><td>모든 요청이 성공했을 때만 <code>save_prev()</code> 실행, 실패하면 이전 목록 유지</td></tr>
+            <tr><td>첫 페이지만 조회</td><td>B 회사 20건, C 회사 10건까지만 가져옴 → 공고가 많은 시기에 누락 가능</td><td>응답의 전체 건수(<code>filteredCount</code>)와 비교해 페이지를 넘기며 수집</td></tr>
+            <tr><td>SSL 검증 해제</td><td><code>verify=False</code>, SMTP <code>CERT_NONE</code>은 중간자 공격을 막지 못함</td><td>사내 루트 인증서를 등록하고 <code>REQUESTS_CA_BUNDLE</code> 사용 (2번 참고)</td></tr>
+            <tr><td>코드 중복</td><td>통합 스크립트와 회사별 스크립트에 같은 수집 코드가 두 벌</td><td>회사별 <code>fetch()</code> 함수를 모듈로 두고 통합·개별 실행이 같이 import</td></tr>
+            <tr><td>첫 줄 오타</td><td>통합 스크립트 첫 줄이 <code># #!/usr/bin/env python3</code>라 <code>./</code>로 실행하면 셸이 해석</td><td><code>#!/usr/bin/env python3</code>로 수정 (메뉴는 <code>python3</code>로 실행해서 영향 없음)</td></tr>
+            <tr><td>사이트 구조 변경</td><td>API 경로나 필드명이 바뀌면 <code>KeyError</code>로 조용히 실패</td><td>실패 시 "수집 실패" 메일을 따로 보내고, 저장해 둔 <code>recruit.flows</code>와 새 요청을 비교해 다시 맞춤</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="note"><strong>크롤링 예의</strong>: 요청 사이 1초 간격, 하루 한 번 실행으로 사이트 부담을 최소화했습니다. 로그인이 필요한 정보나 개인정보는 수집하지 않고, 공개된 공고 목록만 개인 확인용으로 사용합니다. 대상 사이트의 이용약관과 robots.txt도 확인합니다.</div>
+    </section>
+  </main>
+
+  <footer>
+    <p>황태운 · 시스템 인프라 운영 관리자</p>
+  </footer>
+</body>
+</html>
