@@ -29,7 +29,8 @@ title: 작물 질병 진단 앱 (crop-ai) — 스마트팜 하위 프로젝트
     .stat b { display: block; font-size: 1.5rem; color: var(--accent); font-variant-numeric: tabular-nums; }
     .stat span { color: var(--muted); font-size: 0.88rem; }
     .ok { color: #188038; font-weight: 700; }
-    .ng { color: #d93025; font-weight: 700; }
+    .na { color: var(--muted); }
+    section h3 { font-size: 1.05rem; margin-top: 1.5rem; }
     .badge { display: inline-block; font-size: 0.82rem; font-weight: 700; padding: 0.12rem 0.55rem; border-radius: 999px; margin-right: 0.3rem; }
     .b-personal { background: #e6f4ea; color: #188038; }
     .b-wip { background: rgba(232,113,10,0.12); color: #c25e00; }
@@ -45,7 +46,7 @@ title: 작물 질병 진단 앱 (crop-ai) — 스마트팜 하위 프로젝트
       <h1>작물 질병 진단 앱 (crop-ai)</h1>
       <p><span class="badge b-personal">개인 프로젝트</span><span class="badge b-done">앱 완성</span><span class="badge b-done">모델 1차 학습</span><span class="badge b-wip">실제 사진 정확도 개선 필요</span></p>
       <p class="lead">토마토·감자·옥수수 잎 사진을 올리면 <strong>가능성 높은 병 3개와 확률</strong>을 알려주는 앱입니다. 앱 화면(React), 백엔드(Spring Boot), AI 추론 서버(FastAPI), 병 정보 DB(MySQL)를 <strong>모두 직접 만들었고</strong>, 회원가입부터 진단·기록·피드백까지 처음부터 끝까지 동작합니다.</p>
-      <p class="note">모델은 공개 데이터셋(PlantVillage)으로 학습해 <strong>검증 정확도 93.8%</strong>(상위 3개 안에 정답 99.5%)가 나왔습니다. 하지만 이 점수는 실험실 배경 사진 기준이고, 인터넷의 실제 밭 사진으로 시험해 보니 <strong>학습하지 않은 병을 아는 병으로 높은 확률로 잘못 답하는 한계</strong>가 확인됐습니다. 아래 <a href="#limits">4장</a>에 그대로 적었습니다.</p>
+      <p class="note">모델은 공개 데이터셋(PlantVillage)을 <strong>Google Colab GPU</strong>에서 학습해 <strong>검증 정확도 93.8%</strong>(상위 3개 안에 정답 99.5%)가 나왔습니다. 하지만 이 점수는 실험실 배경 사진 기준이고, 인터넷의 실제 밭 사진으로 시험해 보니 <strong>학습하지 않은 병 사진에도 "모르겠다"고 하지 못하고 아는 병 이름을 높은 확률로 대는 한계</strong>가 확인됐습니다. 아래 <a href="#limits">4장</a>에 그대로 적었습니다.</p>
     </header>
 
     <section>
@@ -97,18 +98,50 @@ title: 작물 질병 진단 앱 (crop-ai) — 스마트팜 하위 프로젝트
     </section>
 
     <section>
-      <h2>3. 모델 학습 · 평가 <span class="badge b-done">1차 완료</span></h2>
-      <p>GPU가 없는 태블릿이라 학습은 <strong>Google Colab(T4 GPU)</strong>에서 했고, 결과 파일만 받아 로컬 AI 서버에 넣었습니다. 데이터는 PlantVillage에서 토마토·감자·옥수수 17종만 골라 학습용 19,337장 / 검증용 4,827장으로 나눴습니다(<code>split_plantvillage.py</code>).</p>
-      <div class="stats">
-        <div class="stat"><b>93.8%</b><span>검증 정확도 (1순위 정답)</span></div>
-        <div class="stat"><b>99.5%</b><span>상위 3개 안에 정답</span></div>
-        <div class="stat"><b>94.1%</b><span>작물 선택 적용 시 (서버 방식)</span></div>
-        <div class="stat"><b>약 14분</b><span>학습 시간 (Colab T4, 15 epoch)</span></div>
+      <h2>3. 모델 학습 — Google Colab <span class="badge b-done">1차 완료</span></h2>
+      <p>개발에 쓰는 태블릿은 GPU가 없어서 CPU로 학습하면 몇 시간이 걸립니다. 그래서 학습만 <strong>Google Colab의 무료 T4 GPU</strong>에서 하고, 결과 파일(<code>models.tgz</code>)만 받아 로컬 AI 서버에 넣는 방식으로 나눴습니다. 추론은 CPU로도 충분히 빨라서 서버 쪽에는 GPU가 필요 없습니다.</p>
+
+      <h3>학습 과정</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>순서</th><th>한 일</th><th>이유</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>Colab 새 노트북 → <strong>런타임 유형 변경 → T4 GPU</strong></td><td>기본은 CPU 런타임이라 바꾸지 않으면 학습이 수십 배 느림</td></tr>
+            <tr><td>2</td><td>로컬에서 학습 코드만 묶어(<code>crop-ai-code.tgz</code>: app, training, db, requirements) 파일 패널에 업로드</td><td>저장소 전체가 아니라 학습에 필요한 코드만 올림. 비밀값·DB 정보는 들어가지 않음</td></tr>
+            <tr><td>3</td><td>TensorFlow·Keras 버전과 GPU 인식 확인 → <strong>TF 2.21.0 / Keras 3.13.2</strong> 기록</td><td>모델 파일은 학습한 버전과 같은 버전에서만 안전하게 열리므로, 로컬 서버에 같은 버전을 설치</td></tr>
+            <tr><td>4</td><td>PlantVillage 저장소를 <code>git sparse-checkout</code>으로 토마토·감자·옥수수 컬러 사진만 받음</td><td>전체 38종 대신 필요한 17종만 받아 다운로드량을 줄임</td></tr>
+            <tr><td>5</td><td>학습용/검증용 나누기 → 학습 → 평가·온도 보정</td><td>아래 명령 그대로. 15 epoch 학습에 약 14분</td></tr>
+            <tr><td>6</td><td><code>models.tgz</code>로 묶어 내려받기 → 로컬 <code>ai-server/</code>에 풀고 서버 시작 → <code>/health</code>로 모델 버전 확인</td><td>Colab 런타임은 끊기면 파일이 사라지므로 끝나자마자 내려받음</td></tr>
+          </tbody>
+        </table>
       </div>
+      <figure class="screenshot" style="max-width:640px">
+          <img src="images/12-colab-upload.png" alt="Colab 파일 패널에 crop-ai-code.tgz 업로드, 첫 셀에 버전·GPU 확인 코드 입력" loading="lazy" />
+          <figcaption>② 학습 코드 묶음(<code>crop-ai-code.tgz</code>) 업로드</figcaption>
+        </figure>
+        <figure class="screenshot">
+          <img src="images/13-colab-gpu.png" alt="셀 실행 결과: TF 2.21.0, Keras 3.13.2, GPU PhysicalDevice GPU:0" loading="lazy" />
+          <figcaption>③ GPU 인식, TensorFlow·Keras 버전 확인 (로컬 서버에 같은 버전 설치)</figcaption>
+        </figure>
+      <pre><code>!tar xzf crop-ai-code.tgz
+# PlantVillage 중 토마토·감자·옥수수 컬러 사진만 받기
+!git clone -q --depth 1 --filter=blob:none --sparse https://github.com/spMohanty/PlantVillage-Dataset.git pv
+!cd pv &amp;&amp; git sparse-checkout set --no-cone "raw/color/Tomato___*" "raw/color/Potato___*" "raw/color/Corn_(maize)___*"
+
+!python -m training.split_plantvillage --src pv/raw/color --out data     # 17종, 학습 19,337 / 검증 4,827장
+!python -m training.train --train-dir data/train --val-dir data/valid
+!python -m training.evaluate --data-dir data/valid --fit-temperature      # 정확도·혼동행렬·온도 보정
+!tar czf models.tgz models</code></pre>
       <figure class="screenshot">
         <img src="images/07-training.png" alt="Colab에서 1단계 분류층 학습 5 epoch과 2단계 미세조정이 진행 중인 로그. 검증 정확도 0.84에서 0.90으로 상승" loading="lazy" />
-        <figcaption>Colab 학습 진행 화면. 1단계(분류층만) → 2단계(상위 층 미세조정)</figcaption>
+        <figcaption>⑤ 학습 진행. 1단계(분류층만) 5 epoch → 2단계(상위 층 미세조정) 10 epoch. 오른쪽 아래 T4 런타임</figcaption>
       </figure>
+      <figure class="screenshot" style="max-width:420px">
+        <img src="images/14-colab-done.png" alt="셀 실행 완료 14분, 파일 패널에 models 폴더와 models.tgz 생성" loading="lazy" />
+        <figcaption>⑥ 셀 실행 14분 만에 완료, <code>models.tgz</code> 생성</figcaption>
+      </figure>
+
+      <h3>학습 방법</h3>
       <div class="table-wrap">
         <table>
           <thead><tr><th>단계</th><th>방법</th><th>검증 정확도</th></tr></thead>
@@ -118,6 +151,14 @@ title: 작물 질병 진단 앱 (crop-ai) — 스마트팜 하위 프로젝트
             <tr><td>확률 보정</td><td>온도 보정(temperature scaling) T=1.15. "확률 90%"가 실제로 90% 맞도록 조정해 <code>model_meta.json</code>에 저장</td><td class="num">NLL 0.171 → 0.169</td></tr>
           </tbody>
         </table>
+      </div>
+
+      <h3>결과</h3>
+      <div class="stats">
+        <div class="stat"><b>93.8%</b><span>검증 정확도 (1순위 정답)</span></div>
+        <div class="stat"><b>99.5%</b><span>상위 3개 안에 정답</span></div>
+        <div class="stat"><b>94.1%</b><span>작물 선택 적용 시 (서버 방식)</span></div>
+        <div class="stat"><b>약 14분</b><span>학습 시간 (Colab T4, 15 epoch)</span></div>
       </div>
       <p>병별로 보면 대부분 90% 이상이지만, 서로 비슷하게 생긴 토마토 잎 반점 병들끼리 헷갈렸습니다.</p>
       <div class="table-wrap">
@@ -130,9 +171,6 @@ title: 작물 질병 진단 앱 (crop-ai) — 스마트팜 하위 프로젝트
           </tbody>
         </table>
       </div>
-      <pre><code>python -m training.split_plantvillage --src &lt;PlantVillage color 폴더&gt; --out data   # 17종만 골라 학습/검증 분리
-python -m training.train --train-dir data/train --val-dir data/valid
-python -m training.evaluate --data-dir data/valid --fit-temperature    # 정확도·혼동행렬·온도 보정</code></pre>
       <p>학습된 모델 파일(<code>crop_model.keras</code> 등)은 저장소에 그대로 올리지 않고 <code>gpg</code> AES256으로 암호화한 <code>models.tgz.gpg</code>와 SHA-256 체크섬만 올렸습니다.</p>
     </section>
 
@@ -141,22 +179,23 @@ python -m training.evaluate --data-dir data/valid --fit-temperature    # 정확�
       <p>검증 점수는 PlantVillage 안에서 나눈 사진(단색 배경, 잎 한 장)이라 실제 밭 사진의 성적이 아닙니다. 그래서 인터넷에서 실제 밭 사진 9장을 받아 따로 시험했습니다. 9장 중 학습한 17종에 들어 있는 병은 <strong>감자 역병 1장뿐</strong>이고, 나머지는 일부러 <strong>학습하지 않은 병</strong>으로 골랐습니다.</p>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>실제 병</th><th>학습한 병?</th><th>모델 1순위</th><th>결과</th></tr></thead>
+          <thead><tr><th>실제 병</th><th>학습한 병?</th><th>모델 1순위 (확률)</th><th>판정</th></tr></thead>
           <tbody>
             <tr><td>감자 역병</td><td>예</td><td>역병 97%</td><td class="ok">정답</td></tr>
             <tr><td>옥수수 잎마름 증상</td><td>비슷한 병 있음</td><td>회색점무늬병 50% / 그을음무늬병 49%</td><td>두 후보가 반반 — 0.8 미만이라 한 병으로 확정하지 않고 후보로 안내</td></tr>
-            <tr><td>옥수수 깜부기병</td><td>아니오</td><td>정상 89%</td><td class="ng">오답</td></tr>
-            <tr><td>옥수수 줄기썩음병</td><td>아니오</td><td>정상 83%</td><td class="ng">오답</td></tr>
-            <tr><td>감자 더뎅이병</td><td>아니오</td><td>역병 79%</td><td class="ng">오답</td></tr>
-            <tr><td>감자 Y바이러스</td><td>아니오</td><td>역병 99.8%</td><td class="ng">오답</td></tr>
-            <tr><td>토마토 풋마름병</td><td>아니오</td><td>겹둥근무늬병 96%</td><td class="ng">오답</td></tr>
-            <tr><td>토마토 검은잎곰팡이병</td><td>아니오</td><td>겹둥근무늬병 98%</td><td class="ng">오답</td></tr>
-            <tr><td>토마토 갈색주름과일바이러스(ToBRFV)</td><td>아니오</td><td>겹둥근무늬병 98%</td><td class="ng">오답</td></tr>
+            <tr><td>옥수수 깜부기병</td><td>아니오</td><td>정상 89%</td><td class="na">학습 범위 밖</td></tr>
+            <tr><td>옥수수 줄기썩음병</td><td>아니오</td><td>정상 83%</td><td class="na">학습 범위 밖</td></tr>
+            <tr><td>감자 더뎅이병</td><td>아니오</td><td>역병 79%</td><td class="na">학습 범위 밖</td></tr>
+            <tr><td>감자 Y바이러스</td><td>아니오</td><td>역병 99.8%</td><td class="na">학습 범위 밖</td></tr>
+            <tr><td>토마토 풋마름병</td><td>아니오</td><td>겹둥근무늬병 96%</td><td class="na">학습 범위 밖</td></tr>
+            <tr><td>토마토 검은잎곰팡이병</td><td>아니오</td><td>겹둥근무늬병 98%</td><td class="na">학습 범위 밖</td></tr>
+            <tr><td>토마토 갈색주름과일바이러스(ToBRFV)</td><td>아니오</td><td>겹둥근무늬병 98%</td><td class="na">학습 범위 밖</td></tr>
           </tbody>
         </table>
       </div>
+      <p>학습하지 않은 7종은 애초에 맞힐 수 없는 사진이라 정답·오답을 따질 대상이 아닙니다. 이 시험으로 확인하려던 것은 <strong>모르는 사진을 받았을 때 모델이 어떻게 반응하는가</strong>였고, 결과는 7장 모두 "모르겠다" 대신 79~99.8% 확률로 아는 병 이름을 댔습니다. 사용자는 확률만 보고 그 병이라고 믿을 수 있기 때문에 이 부분이 실제 문제입니다.</p>
       <p>앱 화면으로 시험한 <strong>토마토 잿빛곰팡이병</strong> 사진도 학습하지 않은 병이라, 2장의 결과 화면처럼 "역병 99% 이상"으로 나왔습니다. (시험 사진은 외부 이미지라 페이지에 싣지 않았습니다.)</p>
-      <p class="warn"><strong>원인:</strong> 모델은 "모르는 병"이라는 답이 없어서 항상 17종 중 하나를 고릅니다. 게다가 서버는 사용자가 고른 작물의 병만 남기고 확률을 다시 계산(작물 마스킹)하기 때문에, 토마토를 고르면 토마토 병 몇 개끼리 100%를 나눠 갖게 되어 <strong>틀린 답도 96~99%처럼 높은 확률</strong>로 보입니다. 확률이 높다고 맞는 것이 아니라는 점이 이번 시험에서 가장 크게 배운 부분입니다.</p>
+      <p class="warn"><strong>원인:</strong> 모델은 "모르는 병"이라는 답이 없어서 항상 17종 중 하나를 고릅니다. 게다가 서버는 사용자가 고른 작물의 병만 남기고 확률을 다시 계산(작물 마스킹)하기 때문에, 토마토를 고르면 토마토 병 몇 개끼리 100%를 나눠 갖게 되어 <strong>학습하지 않은 병 사진도 96~99%처럼 높은 확률</strong>로 아는 병 이름이 나옵니다. 확률이 높다고 맞는 것이 아니라는 점이 이번 시험에서 가장 크게 배운 부분입니다.</p>
       <div class="table-wrap">
         <table>
           <thead><tr><th>지금 해 둔 안전장치</th><th>나중에 할 개선</th></tr></thead>
