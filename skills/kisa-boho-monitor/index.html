@@ -1,8 +1,8 @@
 ---
-title: KISA 보호나라 보안공지 자동 모니터링 — Python · cron · SMTP
+title: KISA 보호나라 보안공지 모니터링 — Python · SMTP
 skill_group: 자동화 스크립트
 skill_order: 48
-skill: KISA 보호나라 보안공지를 1시간마다 확인해 새 글을 메일로 알림 — 실패 시 재발송, 비밀값 분리, 오류 감지
+skill: KISA 보호나라 보안공지 새 글을 찾아 메일로 정리 — 어느 PC에서든 실행, 실패 시 재발송, 비밀값 분리, 인증서 검증
 link_label: 보안공지 모니터링 상세
 ---
 <!DOCTYPE html>
@@ -10,8 +10,8 @@ link_label: 보안공지 모니터링 상세
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>KISA 보호나라 보안공지 자동 모니터링 — 황태운</title>
-  <meta name="description" content="KISA 보호나라 보안공지 게시판을 cron으로 1시간마다 확인해 신규 공지를 HTML 표 메일로 알리는 Python 스크립트. 메일 실패 시 재발송, 비밀번호 분리, 사이트 구조 변경 감지, 중복 실행 방지" />
+  <title>KISA 보호나라 보안공지 모니터링 — 황태운</title>
+  <meta name="description" content="KISA 보호나라 보안공지에서 지난번 확인 이후 새 글이나 최근 N일 글을 찾아 HTML 표 메일로 보내는 Python 스크립트. 어느 PC에서든 실행, 메일 실패 시 재발송, 비밀번호 분리, 호스팅 메일 인증서 이름 불일치 해결" />
   <meta name="theme-color" content="#1a73e8" />
   <link rel="icon" href="/favicon.ico" sizes="any" />
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
@@ -38,22 +38,23 @@ link_label: 보안공지 모니터링 상세
 
     <header>
       <p class="tagline">업무 자동화 · 보안 운영</p>
-      <h1>KISA 보호나라 보안공지 자동 모니터링</h1>
-      <p class="lead">서버·장비 취약점 대응을 하려면 KISA 보호나라의 보안공지(제품별 보안 업데이트 권고)를 매일 확인해야 합니다. 사람이 들어가서 보다 보면 놓치는 날이 생겨서, <strong>1시간마다 게시판을 확인해 새 글이 올라오면 메일로 알려주는 스크립트</strong>를 Python 표준 라이브러리만으로 만들어 운영하고 있습니다.</p>
+      <h1>KISA 보호나라 보안공지 모니터링</h1>
+      <p class="lead">서버·장비 취약점 대응을 하려면 KISA 보호나라의 보안공지(제품별 보안 업데이트 권고)를 매일 확인해야 합니다. 매번 사이트에 들어가 어디까지 봤는지 기억하는 게 번거로워서, <strong>실행하면 지난번 확인 이후 새 글(또는 최근 N일 글)을 찾아 메일 한 통으로 정리해 주는 스크립트</strong>를 Python 표준 라이브러리만으로 만들었습니다. 설치할 패키지가 없어 Linux · WSL · Windows 어느 PC에서든 폴더째 옮겨 쓰고, 필요하면 cron에 등록해 자동 감시로도 쓸 수 있습니다.</p>
       <p class="note">회사 메일 서버·계정 정보는 페이지에서 뺐고, 아래 메일·로그 화면은 <strong>예시 데이터</strong>로 만든 것입니다.</p>
     </header>
 
     <section>
       <h2>1. 동작 흐름</h2>
       <figure class="screenshot">
-        <img src="images/01-flow.png" alt="cron이 1시간마다 run_monitor.sh 실행, check_boho.py가 목록을 수집해 신규 판별, 보낼 목록 파일에 추가, send_mail.py가 메일 발송 후 성공 시에만 목록 삭제. 오류는 exit 2, 메일 실패 시 다음 실행 때 재발송, 비밀값은 ~/.secrets에 분리" loading="lazy" />
+        <img src="images/01-flow.png" alt="run.py를 직접 실행(선택: cron), check_boho.py가 목록을 수집해 신규 판별, 보낼 목록 파일에 추가, send_mail.py가 메일 발송 후 성공 시에만 목록 삭제. 오류는 exit 2, 메일 실패 시 다음 실행 때 재발송, 비밀값은 ~/.secrets에 분리" loading="lazy" />
         <figcaption>"수집"과 "발송"을 나누고, 그 사이에 보낼 목록 파일을 둬서 메일이 실패해도 게시글이 사라지지 않게 함</figcaption>
       </figure>
       <div class="table-wrap">
         <table>
           <thead><tr><th>파일</th><th>역할</th></tr></thead>
           <tbody>
-            <tr><td><code>run_monitor.sh</code></td><td>cron 진입점. <code>flock</code>으로 중복 실행 방지, 보낼 목록이 있으면 발송 스크립트 실행</td></tr>
+            <tr><td><code>run.py</code></td><td>직접 실행하는 진입점. <code>--print</code>(화면만), <code>--days N</code>(최근 N일)</td></tr>
+            <tr><td><code>run_monitor.sh</code></td><td>(선택) cron 자동 실행용. <code>flock</code>으로 중복 실행 방지</td></tr>
             <tr><td><code>check_boho.py</code></td><td>보안공지 목록 페이지를 받아 번호·제목·날짜·링크 파싱 → 마지막으로 본 글 번호(nttId)보다 큰 글을 신규로 판단</td></tr>
             <tr><td><code>send_mail.py</code></td><td>보낼 목록을 텍스트 + HTML 표 메일로 발송, <strong>성공했을 때만</strong> 목록 삭제</td></tr>
             <tr><td><code>common.py</code></td><td>설정 파일 읽기, TLS 설정, JSON 안전 저장(임시 파일 → 교체)</td></tr>
@@ -80,9 +81,11 @@ link_label: 보안공지 모니터링 상세
           </tbody>
         </table>
       </div>
-      <pre><code>python3 check_boho.py --init    # 처음 1회: 현재 목록을 기준으로 저장
-python3 check_boho.py --list    # 마지막으로 본 목록, 메일 대기 건수
-python3 check_boho.py           # 신규 확인 (cron)</code></pre>
+      <pre><code>python3 run.py                  # 지난번 확인 이후 새 글 → 메일
+python3 run.py --print          # 화면에만 표시 (메일·기록 변경 없음)
+python3 run.py --days 7         # 최근 7일 글 → 메일 (다른 PC에서 처음 쓸 때)
+python3 check_boho.py --list    # 마지막으로 본 목록, 메일 대기 건수</code></pre>
+      <p>"지난번 확인" 기록은 실행한 폴더에 저장되므로 PC마다 따로입니다. 그래서 다른 PC에서는 <code>--days</code>로 기간을 지정합니다. 오래 실행하지 않아 첫 페이지가 모두 새 글이면, 그 이전 글이 더 있을 수 있다고 화면에 알려 줍니다.</p>
     </section>
 
     <section>
@@ -108,7 +111,8 @@ python3 check_boho.py           # 신규 확인 (cron)</code></pre>
             <tr><td>메일 비밀번호</td><td class="before">코드에 직접 작성</td><td class="after">~/.secrets/kisa_mail.env (600)로 분리, 권한이 넓으면 경고</td></tr>
             <tr><td>메일 실패</td><td class="before">기준값을 먼저 올려 실패한 게시글이 다시는 안 보내짐</td><td class="after">보낼 목록에 먼저 저장 → 발송 성공 시에만 삭제, 실패분은 다음 실행 때 신규와 합쳐 재발송</td></tr>
             <tr><td>사이트 구조 변경</td><td class="before">파싱 0건도 "신규 없음"과 같은 exit 1</td><td class="after">exit 2 + <code>[ERROR]</code> 로그로 구분</td></tr>
-            <tr><td>TLS 인증서 검증</td><td class="before">수집·메일 모두 검증 끔</td><td class="after">기본은 검증. 사내 SSL 검사 장비가 있으면 그 루트 CA 파일을 지정, 검증 끄기는 설정으로만</td></tr>
+            <tr><td>TLS 인증서 검증</td><td class="before">수집·메일 모두 검증 끔</td><td class="after">기본은 검증. 메일 서버 이름 불일치는 원인을 찾아 해결 (아래)</td></tr>
+            <tr><td>실행 방식</td><td class="before">한 PC의 cron에 고정</td><td class="after">어느 PC에서든 <code>run.py</code>로 직접 실행, 최근 N일 모드 추가</td></tr>
             <tr><td>중복 실행</td><td class="before">이전 실행이 길어지면 겹쳐 실행</td><td class="after"><code>flock -n</code>으로 건너뜀</td></tr>
             <tr><td>상태 파일</td><td class="before">직접 덮어쓰기 (중단 시 깨질 수 있음)</td><td class="after">임시 파일에 쓰고 <code>os.replace</code>로 교체</td></tr>
             <tr><td>SMTP 접속</td><td class="before">로그인 테스트용 접속 + 발송용 접속 2번</td><td class="after">발송 때 1번. 점검은 <code>--check</code> 옵션으로 따로</td></tr>
@@ -116,11 +120,19 @@ python3 check_boho.py           # 신규 확인 (cron)</code></pre>
           </tbody>
         </table>
       </div>
-      <div class="warn"><code>TLS_VERIFY=0</code>(검증 끄기)로 두면 중간에서 인증서를 바꿔치기해도 알 수 없어, 메일 계정 비밀번호가 노출될 수 있습니다. 사내 SSL 검사 장비 때문에 검증이 실패하면 검증을 끄기보다 그 장비의 루트 CA를 <code>*_CA_FILE</code>에 지정하는 것이 맞습니다.</div>
+      <h3>메일 서버 인증서 이름 불일치 — 검증을 끄지 않고 해결</h3>
+      <p>인증서 검증을 켜자 회사 메일 서버(<code>mail.회사도메인</code>) 접속이 <code>Hostname mismatch</code>로 실패했습니다. 처음 버전이 검증을 꺼 둔 이유도 이것이었습니다. 원인을 확인한 순서는 다음과 같습니다.</p>
+      <ol>
+        <li>발급 기관 검증만 켜고 인증서 내용을 보니 정식 인증서(Sectigo)인데 이름이 <code>*.호스팅업체.net</code></li>
+        <li>IP 역방향 조회 → 메일 호스팅 업체의 공용 서버. 회사 도메인은 그 서버를 가리키는 <strong>별칭</strong>일 뿐</li>
+        <li>같은 IP를 가리키는 호스팅 업체 쪽 고객사 주소(<code>회사명.호스팅업체.net</code>)를 찾아 <strong>이름·발급 기관 모두 검증 통과</strong> 확인</li>
+        <li><code>SMTP_HOST</code>만 그 주소로 바꿔 검증을 켠 채로 발송</li>
+      </ol>
+      <div class="warn">검증을 끄면(<code>TLS_VERIFY=0</code>) 중간에서 인증서를 바꿔치기해도 알 수 없어, 로그인할 때 메일 계정 비밀번호가 노출될 수 있습니다. 이름 불일치는 대부분 이렇게 "어느 이름으로 접속해야 하는지"의 문제라, 끄기 전에 원인을 확인하는 것이 맞습니다.</div>
     </section>
 
     <section>
-      <h2>5. 설치와 운영</h2>
+      <h2>5. 설치와 사용</h2>
       <pre><code>APP=$HOME/kisa_Craw
 cd "$APP"
 mkdir -p ~/.secrets logs &amp;&amp; chmod 700 ~/.secrets
@@ -128,12 +140,14 @@ cp kisa_mail.env.example ~/.secrets/kisa_mail.env &amp;&amp; chmod 600 ~/.secret
 vi ~/.secrets/kisa_mail.env              # SMTP 서버·계정·받는 사람
 
 python3 send_mail.py --check             # SMTP 로그인만 확인 (발송 안 함)
-python3 check_boho.py --init             # 기준값 저장
-crontab -e
-0 * * * * /home/taeun/kisa_Craw/run_monitor.sh &gt;&gt; /home/taeun/kisa_Craw/logs/monitor.log 2&gt;&amp;1</code></pre>
+python3 run.py --days 3 --print          # 최근 3일 글 미리보기
+python3 run.py                           # 새 글 → 메일
+
+# (선택) 자동 실행: crontab
+# 0 * * * * $APP/run_monitor.sh &gt;&gt; $APP/logs/monitor.log 2&gt;&amp;1</code></pre>
       <figure class="screenshot">
         <img src="images/03-log.png" alt="로그 예시: 9시 신규 2건 발견 후 메일 발송 실패, 10시 신규 1건과 합쳐 3건 발송 완료, 12시 게시글 0건 파싱 오류" loading="lazy" />
-        <figcaption>9시에 메일이 실패한 2건이 10시 신규 1건과 합쳐져 3건으로 재발송된 흐름 (예시)</figcaption>
+        <figcaption>cron으로 자동 실행할 때의 로그 예시 — 9시에 메일이 실패한 2건이 10시 신규 1건과 합쳐져 3건으로 재발송</figcaption>
       </figure>
       <pre><code>grep ERROR logs/monitor.log | tail      # 실패만 보기
 python3 send_mail.py --dry-run          # 대기 중인 메일 내용을 발송 없이 확인</code></pre>
@@ -146,9 +160,10 @@ python3 send_mail.py --dry-run          # 대기 중인 메일 내용을 발송 
         <table>
           <thead><tr><th>한계</th><th>다음 단계</th></tr></thead>
           <tbody>
-            <tr><td>목록 <strong>첫 페이지만</strong> 확인 — 1시간 안에 한 페이지보다 많은 글이 올라오면 일부 누락 가능</td><td>신규가 페이지 전체를 채우면 다음 페이지까지 확인</td></tr>
+            <tr><td>목록 <strong>첫 페이지만</strong> 확인 — 오래 실행하지 않으면 그 이전 새 글이 빠질 수 있음 (현재는 화면에 경고만)</td><td>첫 페이지가 모두 새 글이면 다음 페이지까지 자동 확인</td></tr>
             <tr><td>HTML을 정규식으로 파싱 — 사이트 개편 시 수정 필요 (대신 exit 2로 바로 알 수 있음)</td><td>연속 오류 시 관리자에게 별도 알림 메일</td></tr>
             <tr><td>영향 제품·버전은 원문을 직접 봐야 함</td><td>원문 본문에서 제품명을 뽑아 <strong>우리 자산 목록과 대조</strong>해 해당 여부 표시</td></tr>
+            <tr><td>"지난번 확인" 기록이 PC마다 따로</td><td>기록 파일을 동기화 폴더(NAS 등)에 두는 옵션</td></tr>
             <tr><td>메일로만 알림</td><td>Slack·Teams 웹훅 추가</td></tr>
           </tbody>
         </table>
