@@ -1,0 +1,163 @@
+---
+title: KISA 보호나라 보안공지 자동 모니터링 — Python · cron · SMTP
+skill_group: 자동화 스크립트
+skill_order: 48
+skill: KISA 보호나라 보안공지를 1시간마다 확인해 새 글을 메일로 알림 — 실패 시 재발송, 비밀값 분리, 오류 감지
+link_label: 보안공지 모니터링 상세
+---
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>KISA 보호나라 보안공지 자동 모니터링 — 황태운</title>
+  <meta name="description" content="KISA 보호나라 보안공지 게시판을 cron으로 1시간마다 확인해 신규 공지를 HTML 표 메일로 알리는 Python 스크립트. 메일 실패 시 재발송, 비밀번호 분리, 사이트 구조 변경 감지, 중복 실행 방지" />
+  <meta name="theme-color" content="#1a73e8" />
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="stylesheet" href="../../assets/style.css" />
+  <style>
+    .table-wrap { overflow-x: auto; margin: 0.6rem 0 1rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+    th, td { border: 1px solid var(--border); padding: 0.5rem 0.7rem; text-align: left; vertical-align: top; }
+    th { background: var(--accent-soft); color: var(--accent); font-weight: 700; white-space: nowrap; }
+    .note { border-left: 4px solid var(--accent); background: var(--accent-soft); padding: 0.7rem 1rem; border-radius: 0 8px 8px 0; margin: 0.8rem 0; }
+    .warn { border-left: 4px solid #d93025; background: rgba(217,48,37,0.08); padding: 0.7rem 1rem; border-radius: 0 8px 8px 0; margin: 0.8rem 0; }
+    .screenshot { margin: 0.8rem 0 1.2rem; }
+    .screenshot img { display: block; max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 8px; }
+    .screenshot figcaption { margin-top: 0.4rem; color: var(--muted); font-size: 0.88rem; }
+    section h3 { font-size: 1.05rem; margin-top: 1.5rem; }
+    .before { color: #d93025; }
+    .after { color: #188038; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <main>
+    <a href="../../index.html" class="back-link">← 메인으로</a>
+
+    <header>
+      <p class="tagline">업무 자동화 · 보안 운영</p>
+      <h1>KISA 보호나라 보안공지 자동 모니터링</h1>
+      <p class="lead">서버·장비 취약점 대응을 하려면 KISA 보호나라의 보안공지(제품별 보안 업데이트 권고)를 매일 확인해야 합니다. 사람이 들어가서 보다 보면 놓치는 날이 생겨서, <strong>1시간마다 게시판을 확인해 새 글이 올라오면 메일로 알려주는 스크립트</strong>를 Python 표준 라이브러리만으로 만들어 운영하고 있습니다.</p>
+      <p class="note">회사 메일 서버·계정 정보는 페이지에서 뺐고, 아래 메일·로그 화면은 <strong>예시 데이터</strong>로 만든 것입니다.</p>
+    </header>
+
+    <section>
+      <h2>1. 동작 흐름</h2>
+      <figure class="screenshot">
+        <img src="images/01-flow.png" alt="cron이 1시간마다 run_monitor.sh 실행, check_boho.py가 목록을 수집해 신규 판별, 보낼 목록 파일에 추가, send_mail.py가 메일 발송 후 성공 시에만 목록 삭제. 오류는 exit 2, 메일 실패 시 다음 실행 때 재발송, 비밀값은 ~/.secrets에 분리" loading="lazy" />
+        <figcaption>"수집"과 "발송"을 나누고, 그 사이에 보낼 목록 파일을 둬서 메일이 실패해도 게시글이 사라지지 않게 함</figcaption>
+      </figure>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>파일</th><th>역할</th></tr></thead>
+          <tbody>
+            <tr><td><code>run_monitor.sh</code></td><td>cron 진입점. <code>flock</code>으로 중복 실행 방지, 보낼 목록이 있으면 발송 스크립트 실행</td></tr>
+            <tr><td><code>check_boho.py</code></td><td>보안공지 목록 페이지를 받아 번호·제목·날짜·링크 파싱 → 마지막으로 본 글 번호(nttId)보다 큰 글을 신규로 판단</td></tr>
+            <tr><td><code>send_mail.py</code></td><td>보낼 목록을 텍스트 + HTML 표 메일로 발송, <strong>성공했을 때만</strong> 목록 삭제</td></tr>
+            <tr><td><code>common.py</code></td><td>설정 파일 읽기, TLS 설정, JSON 안전 저장(임시 파일 → 교체)</td></tr>
+            <tr><td><code>~/.secrets/kisa_mail.env</code></td><td>SMTP 서버·계정·받는 사람 (권한 600, 코드와 분리)</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>2. 신규 글 판단 방법</h2>
+      <ul>
+        <li>게시글 링크의 <code>nttId</code>(글 고유 번호)는 새 글일수록 커집니다. 처음 한 번 <code>--init</code>으로 현재 최댓값을 저장하고, 이후에는 그보다 큰 글만 신규로 봅니다.</li>
+        <li>제목의 <code>&amp;amp;</code>, <code>&amp;quot;</code> 같은 HTML 문자는 원래 글자로 되돌려 메일에 넣습니다.</li>
+        <li><strong>목록이 0건으로 파싱되면 "신규 없음"이 아니라 오류</strong>로 처리합니다. 사이트 디자인이 바뀌면 정규식이 아무것도 못 찾는데, 이걸 "신규 없음"으로 처리하면 알림이 조용히 멈춘 것을 아무도 모르게 됩니다.</li>
+      </ul>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>exit code</th><th>의미</th><th>run_monitor.sh 동작</th></tr></thead>
+          <tbody>
+            <tr><td>0</td><td>신규 있음 (보낼 목록에 추가됨)</td><td>메일 발송</td></tr>
+            <tr><td>1</td><td>신규 없음</td><td>보낼 목록이 남아 있을 때만 발송(이전 실패분)</td></tr>
+            <tr><td>2</td><td>오류 — 네트워크, 목록 0건(사이트 구조 변경 의심)</td><td>로그에 <code>[ERROR]</code> 기록</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <pre><code>python3 check_boho.py --init    # 처음 1회: 현재 목록을 기준으로 저장
+python3 check_boho.py --list    # 마지막으로 본 목록, 메일 대기 건수
+python3 check_boho.py           # 신규 확인 (cron)</code></pre>
+    </section>
+
+    <section>
+      <h2>3. 알림 메일</h2>
+      <figure class="screenshot" style="max-width:760px">
+        <img src="images/02-mail.png" alt="알림 메일 예시: 제목 [보안공지] KISA 보호나라 신규 3건, 게시일과 제목(원문 링크) 표, 확인할 것 4가지" loading="lazy" />
+        <figcaption>HTML 표 메일 (예시 데이터). 제목을 누르면 보호나라 원문으로 이동</figcaption>
+      </figure>
+      <ul>
+        <li><strong>텍스트 + HTML을 함께</strong> 보냅니다(<code>multipart/alternative</code>). HTML을 못 보는 메일 프로그램에서는 텍스트가 보입니다.</li>
+        <li>표는 <code>width:100%</code>, <code>table-layout:fixed</code>, 제목 칸 줄바꿈으로 <strong>화면보다 넓어지지 않게</strong> 했습니다.</li>
+        <li>여러 건이 한꺼번에 올라와도 메일 1통에 모아서 보냅니다.</li>
+      </ul>
+      <div class="note"><strong>Word 보고서 첨부는 없앴습니다.</strong> 처음에는 메일마다 Word(docx) 보고서를 템플릿으로 만들어 첨부했는데, 긴 제목·링크가 들어가면 표가 페이지 폭을 넘어 모양이 깨졌고, 영향 제품·권고 조치 칸은 실제 내용 없이 "원문 참고" 같은 고정 문구만 들어갔습니다. 메일 본문의 표로 충분해서 첨부를 빼고 <code>python-docx</code> 의존성도 없앴습니다.</div>
+    </section>
+
+    <section>
+      <h2>4. 운영하면서 고친 점</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>항목</th><th>처음 버전</th><th>개선</th></tr></thead>
+          <tbody>
+            <tr><td>메일 비밀번호</td><td class="before">코드에 직접 작성</td><td class="after">~/.secrets/kisa_mail.env (600)로 분리, 권한이 넓으면 경고</td></tr>
+            <tr><td>메일 실패</td><td class="before">기준값을 먼저 올려 실패한 게시글이 다시는 안 보내짐</td><td class="after">보낼 목록에 먼저 저장 → 발송 성공 시에만 삭제, 실패분은 다음 실행 때 신규와 합쳐 재발송</td></tr>
+            <tr><td>사이트 구조 변경</td><td class="before">파싱 0건도 "신규 없음"과 같은 exit 1</td><td class="after">exit 2 + <code>[ERROR]</code> 로그로 구분</td></tr>
+            <tr><td>TLS 인증서 검증</td><td class="before">수집·메일 모두 검증 끔</td><td class="after">기본은 검증. 사내 SSL 검사 장비가 있으면 그 루트 CA 파일을 지정, 검증 끄기는 설정으로만</td></tr>
+            <tr><td>중복 실행</td><td class="before">이전 실행이 길어지면 겹쳐 실행</td><td class="after"><code>flock -n</code>으로 건너뜀</td></tr>
+            <tr><td>상태 파일</td><td class="before">직접 덮어쓰기 (중단 시 깨질 수 있음)</td><td class="after">임시 파일에 쓰고 <code>os.replace</code>로 교체</td></tr>
+            <tr><td>SMTP 접속</td><td class="before">로그인 테스트용 접속 + 발송용 접속 2번</td><td class="after">발송 때 1번. 점검은 <code>--check</code> 옵션으로 따로</td></tr>
+            <tr><td>로그 위치</td><td class="before"><code>/var/log</code> (일반 계정 cron은 쓰기 권한 없음)</td><td class="after">스크립트 폴더 <code>logs/</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="warn"><code>TLS_VERIFY=0</code>(검증 끄기)로 두면 중간에서 인증서를 바꿔치기해도 알 수 없어, 메일 계정 비밀번호가 노출될 수 있습니다. 사내 SSL 검사 장비 때문에 검증이 실패하면 검증을 끄기보다 그 장비의 루트 CA를 <code>*_CA_FILE</code>에 지정하는 것이 맞습니다.</div>
+    </section>
+
+    <section>
+      <h2>5. 설치와 운영</h2>
+      <pre><code>APP=$HOME/kisa_Craw
+cd "$APP"
+mkdir -p ~/.secrets logs &amp;&amp; chmod 700 ~/.secrets
+cp kisa_mail.env.example ~/.secrets/kisa_mail.env &amp;&amp; chmod 600 ~/.secrets/kisa_mail.env
+vi ~/.secrets/kisa_mail.env              # SMTP 서버·계정·받는 사람
+
+python3 send_mail.py --check             # SMTP 로그인만 확인 (발송 안 함)
+python3 check_boho.py --init             # 기준값 저장
+crontab -e
+0 * * * * /home/taeun/kisa_Craw/run_monitor.sh &gt;&gt; /home/taeun/kisa_Craw/logs/monitor.log 2&gt;&amp;1</code></pre>
+      <figure class="screenshot">
+        <img src="images/03-log.png" alt="로그 예시: 9시 신규 2건 발견 후 메일 발송 실패, 10시 신규 1건과 합쳐 3건 발송 완료, 12시 게시글 0건 파싱 오류" loading="lazy" />
+        <figcaption>9시에 메일이 실패한 2건이 10시 신규 1건과 합쳐져 3건으로 재발송된 흐름 (예시)</figcaption>
+      </figure>
+      <pre><code>grep ERROR logs/monitor.log | tail      # 실패만 보기
+python3 send_mail.py --dry-run          # 대기 중인 메일 내용을 발송 없이 확인</code></pre>
+      <p>시험할 때는 실제 사이트 대신 <strong>가짜 목록 HTML</strong>과 로컬 SMTP 서버(aiosmtpd)로 초기화 → 신규 없음 → 신규 2건 → 비밀번호 오류로 발송 실패(목록 유지) → 신규 1건 추가(대기 3건) → 발송 성공(목록 삭제) → 목록 0건(exit 2) 순서를 확인했습니다.</p>
+    </section>
+
+    <section>
+      <h2>6. 한계와 다음 단계</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>한계</th><th>다음 단계</th></tr></thead>
+          <tbody>
+            <tr><td>목록 <strong>첫 페이지만</strong> 확인 — 1시간 안에 한 페이지보다 많은 글이 올라오면 일부 누락 가능</td><td>신규가 페이지 전체를 채우면 다음 페이지까지 확인</td></tr>
+            <tr><td>HTML을 정규식으로 파싱 — 사이트 개편 시 수정 필요 (대신 exit 2로 바로 알 수 있음)</td><td>연속 오류 시 관리자에게 별도 알림 메일</td></tr>
+            <tr><td>영향 제품·버전은 원문을 직접 봐야 함</td><td>원문 본문에서 제품명을 뽑아 <strong>우리 자산 목록과 대조</strong>해 해당 여부 표시</td></tr>
+            <tr><td>메일로만 알림</td><td>Slack·Teams 웹훅 추가</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>황태운 · 시스템 인프라 운영 관리자</p>
+  </footer>
+</body>
+</html>
