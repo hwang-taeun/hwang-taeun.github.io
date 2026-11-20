@@ -2,6 +2,7 @@
 # 프로젝트 목록 자동 생성
 #  - 상세 페이지가 있는 프로젝트: projects/<폴더>/index.html 머리말에 type: project 로 등록
 #  - 상세 페이지가 없는 프로젝트: 아래 extra_projects 에 등록 (형식은 상세 페이지 머리말과 동일 + anchor)
+#  - 머리말에 category: ai 를 넣으면 아래 "AI 활용" 섹션으로 분류
 extra_projects: []
 ---
 <!DOCTYPE html>
@@ -44,15 +45,16 @@ extra_projects: []
     <header>
       <p class="tagline">시스템 인프라 운영 관리자</p>
       <h1>황태운의 대표 프로젝트</h1>
-      <p class="lead">실제 운영 환경에서 문제 해결을 위해 구축·적용한 프로젝트입니다.</p>
+      <p class="lead">실제 운영 환경에서 문제 해결을 위해 구축·적용한 프로젝트와, AI를 직접 학습·평가해 본 개인 프로젝트입니다.</p>
+      <p><a href="#infra">대표 프로젝트</a> · <a href="#ai">AI 활용</a></p>
     </header>
 
-    <section>
+    <section id="infra">
       <h2>대표 프로젝트</h2>
 
       {% assign project_pages = site.pages | where: "type", "project" %}
       {% assign projects = project_pages | concat: page.extra_projects | sort: "order" %}
-      {% for p in projects %}
+      {% for p in projects %}{% if p.category != "ai" %}
       <article class="project" id="{{ p.anchor }}">
         <h3>{{ p.title }}</h3>
         <div class="facts">
@@ -73,7 +75,34 @@ extra_projects: []
         <p class="detail-link"><a href="{{ p.url | relative_url }}">→ 상세 보기</a></p>
         {% endif %}
       </article>
-      {% endfor %}
+      {% endif %}{% endfor %}
+    </section>
+
+    <section id="ai">
+      <h2>AI 활용</h2>
+      <p class="lead">GPU가 없는 개인 PC 대신 Google Colab에서 모델을 학습하고, 운영 관점(오탐·설명 가능성·재현성)으로 평가한 프로젝트입니다.</p>
+      {% for p in projects %}{% if p.category == "ai" %}
+      <article class="project" id="{{ p.anchor }}">
+        <h3>{{ p.title }}</h3>
+        <div class="facts">
+          <div class="fact">
+            <span class="fact-label">문제</span>
+            <p>{{ p.problem }}</p>
+          </div>
+          <div class="fact">
+            <span class="fact-label">조치</span>
+            <p>{{ p.action }}</p>
+          </div>
+          <div class="fact">
+            <span class="fact-label">결과</span>
+            <p>{{ p.result }}</p>
+          </div>
+        </div>
+        {% if p.url %}
+        <p class="detail-link"><a href="{{ p.url | relative_url }}">→ 상세 보기</a></p>
+        {% endif %}
+      </article>
+      {% endif %}{% endfor %}
     </section>
   </main>
 

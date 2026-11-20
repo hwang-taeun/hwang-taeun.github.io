@@ -1,5 +1,6 @@
 ---
 # 대표 프로젝트 목록은 projects/*/index.html 머리말과 projects.html 의 extra_projects 에서 자동 생성
+# 머리말에 category: ai 가 있는 프로젝트는 "대표 프로젝트" 대신 "AI 활용" 상자에 나옴
 ---
 <!DOCTYPE html>
 <html lang="ko">
@@ -9,6 +10,9 @@
   <title>황태운 — 시스템 인프라 운영 관리자</title>
   <meta name="description" content="황태운의 Linux·Windows 시스템 인프라 운영 관리자. 보안 점검·하드닝과 장애 대응 자동화를 중심으로 한 포트폴리오" />
   <meta name="theme-color" content="#1a73e8" />
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet" />
@@ -161,7 +165,19 @@
         {% assign projects_page = site.pages | where: "name", "projects.html" | first %}
         {% assign project_pages = site.pages | where: "type", "project" %}
         {% assign projects = project_pages | concat: projects_page.extra_projects | sort: "order" %}
-        {% for p in projects %}{% if p.featured %}
+        {% for p in projects %}{% if p.featured and p.category != "ai" %}
+        <li><span class="highlight">{{ p.short_title | default: p.title }}</span> — {{ p.summary }}</li>
+        {% endif %}{% endfor %}
+      </ul>
+    </section>
+
+    <section>
+      <div class="section-header">
+        <h2>AI 활용</h2>
+        <a href="projects.html#ai" class="btn-link">AI 프로젝트 보기 →</a>
+      </div>
+      <ul>
+        {% for p in projects %}{% if p.category == "ai" %}
         <li><span class="highlight">{{ p.short_title | default: p.title }}</span> — {{ p.summary }}</li>
         {% endif %}{% endfor %}
       </ul>
