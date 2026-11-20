@@ -1,0 +1,271 @@
+---
+title: 2단계 IPS — Suricata + ET Open vs AI 탐지 비교
+---
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>2단계 IPS — Suricata + ET Open vs AI 탐지 비교 — 황태운</title>
+  <meta name="description" content="CIC-IDS2017 금요일 pcap(8.84 GB)을 Suricata 8.0.8 + ET Open 룰과 흐름 기반 AI 모델(그래디언트 부스팅, MLP)에 넣어 같은 흐름 단위로 탐지율·오탐률을 비교하고, 학습하지 않은 공격에 대한 AI의 한계를 확인한 실험" />
+  <meta name="theme-color" content="#1a73e8" />
+  <link rel="stylesheet" href="../../../assets/style.css" />
+  <style>
+    .table-wrap { overflow-x: auto; margin: 0.6rem 0 1rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+    th, td { border: 1px solid var(--border); padding: 0.5rem 0.7rem; text-align: left; vertical-align: top; }
+    th { background: var(--accent-soft); color: var(--accent); font-weight: 700; white-space: nowrap; }
+    td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    tr.hl td { background: rgba(27,175,122,0.08); font-weight: 600; }
+    tr.ref td { color: var(--muted); }
+    .note { border-left: 4px solid var(--accent); background: var(--accent-soft); padding: 0.7rem 1rem; border-radius: 0 8px 8px 0; margin: 0.8rem 0; }
+    .warn { border-left: 4px solid #d93025; background: rgba(217,48,37,0.08); padding: 0.7rem 1rem; border-radius: 0 8px 8px 0; margin: 0.8rem 0; }
+    .plan { border-left: 4px solid #e8710a; background: rgba(232,113,10,0.08); padding: 0.7rem 1rem; border-radius: 0 8px 8px 0; margin: 0.8rem 0; }
+    .screenshot { margin: 0.8rem 0 1.2rem; }
+    .screenshot img { display: block; max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 8px; }
+    .screenshot figcaption { margin-top: 0.4rem; color: var(--muted); font-size: 0.88rem; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.8rem; margin: 0.8rem 0 1rem; }
+    .stat { border: 1px solid var(--border); border-radius: 10px; padding: 0.7rem 0.9rem; }
+    .stat b { display: block; font-size: 1.5rem; color: var(--accent); font-variant-numeric: tabular-nums; }
+    .stat span { color: var(--muted); font-size: 0.88rem; }
+    section h3 { font-size: 1.05rem; margin-top: 1.5rem; }
+    .badge { display: inline-block; font-size: 0.82rem; font-weight: 700; padding: 0.12rem 0.55rem; border-radius: 999px; margin-right: 0.3rem; }
+    .b-personal { background: #e6f4ea; color: #188038; }
+    .b-done { background: var(--accent-soft); color: var(--accent); }
+  </style>
+</head>
+<body>
+  <main>
+    <a href="../" class="back-link">← 룰 vs AI 비교 프로젝트로</a>
+
+    <header>
+      <p class="tagline">개인 프로젝트 · 룰 기반 vs AI 탐지 비교 2단계</p>
+      <h1>IPS — Suricata + ET Open vs AI</h1>
+      <p><span class="badge b-personal">개인 프로젝트</span><span class="badge b-done">Colab 실행 완료</span></p>
+      <p class="lead">공개 침입 탐지 데이터셋 CIC-IDS2017의 <strong>금요일 원본 패킷(8.84 GB)</strong>을 실제 IPS 엔진인 <strong>Suricata 8.0.8 + Emerging Threats Open 룰</strong>로 재생하고, Suricata가 만든 <strong>같은 흐름(연결) 목록</strong>을 AI 모델 2개에도 넣어 탐지율과 오탐률을 비교했습니다.</p>
+      <div class="stats">
+        <div class="stat"><b>0.10%</b><span>ET 룰(심각도 1–2) 흐름 탐지율</span></div>
+        <div class="stat"><b>99.7%</b><span>AI 흐름 탐지율 (오탐 0.023%)</span></div>
+        <div class="stat"><b>0–26%</b><span>학습에서 뺀 공격에 대한 AI 탐지율</span></div>
+        <div class="stat"><b>2 / 3</b><span>룰이 경보를 낸 공격 종류 (봇넷은 0건)</span></div>
+      </div>
+      <p class="note">1단계 WAF보다 차이가 더 극단적이었습니다. ET Open 룰은 이날의 포트 스캔·DDoS·봇넷 흐름을 거의 잡지 못했고, AI는 99.7%를 잡았습니다. 하지만 <strong>공격 종류 하나를 학습에서 빼면 AI는 그 공격을 0–26%밖에 잡지 못했습니다.</strong> 결론은 "룰은 시그니처가 있는 공격, 지도 학습 AI는 본 적 있는 공격만 잡는다"입니다. 근거는 <a href="#unseen">6장</a>에 있습니다.</p>
+    </header>
+
+    <section>
+      <h2>1. 실험 구성</h2>
+      <figure class="screenshot">
+        <img src="images/00-pipeline.png" alt="CIC-IDS2017 금요일 pcap → Suricata 8.0.8(53,582개 룰)이 흐름 523,264개와 경보 141만 건 생성 → CIC 라벨과 IP·포트·프로토콜로 매칭(모호·미매칭 제외) → 60/20/20 분할 → 같은 흐름을 룰(ET 경보 여부)과 AI(흐름 특성 18개)가 판정" loading="lazy" />
+      </figure>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>구분</th><th>사용한 것</th><th>선택 이유</th></tr></thead>
+          <tbody>
+            <tr><td>데이터</td><td>CIC-IDS2017 금요일 원본 pcap + CIC가 배포한 흐름 라벨 (봇넷 ARES, 포트 스캔, DDoS LOIT)</td><td>원본 패킷이 공개돼 있어 IPS 엔진에 그대로 재생할 수 있는 대표 데이터셋</td></tr>
+            <tr><td>룰 기반</td><td>Suricata 8.0.8 (OISF 공식 PPA) + <code>suricata-update</code>로 받은 ET Open 최신 룰</td><td>현재 유지보수 중인 오픈소스 IPS와 무료 공개 룰셋</td></tr>
+            <tr><td>판정 단위</td><td>Suricata의 <strong>흐름(flow)</strong> 기록. 경보는 <code>flow_id</code>로 붙임</td><td>룰과 AI가 완전히 같은 대상을 판정하도록 하기 위함</td></tr>
+            <tr><td>AI 모델 A</td><td>흐름 특성 18개 + 그래디언트 부스팅 (scikit-learn, CPU)</td><td>표 형태 데이터의 표준 방식</td></tr>
+            <tr><td>AI 모델 B</td><td>같은 특성 + 3층 신경망 MLP (PyTorch, T4 GPU)</td><td>딥러닝 방식과 비교</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><strong>AI 특성에 넣지 않은 것</strong>: IP 주소(공격자 IP를 외우면 의미가 없음)와 경보 여부(룰 결과를 베끼면 의미가 없음). 넣은 것은 프로토콜, 목적지 포트, 방향별 패킷·바이트 수, 지속 시간, 패킷당 바이트, TCP 플래그, 연결 상태 등입니다.</p>
+      <p>노트북: <a href="ids_lab_phase2.ipynb" download><code>ids_lab_phase2.ipynb</code></a> (Colab에서 T4 GPU 선택 후 모두 실행, 약 10–15분. 첫 셀의 <code>DAY</code>로 다른 요일 선택)</p>
+    </section>
+
+    <section>
+      <h2>2. Suricata로 pcap 8.8 GB 재생</h2>
+      <figure class="screenshot">
+        <img src="images/10-download.png" alt="Hugging Face 미러에서 Friday-WorkingHours.pcap 8.84GB와 GeneratedLabelledFlows.zip 284MB를 73초에 받고, 금요일 라벨 CSV 3개 추출" loading="lazy" />
+        <figcaption>공개 미러에서 pcap 8.84 GB와 라벨 파일을 73초에 받음 (Colab 네트워크 약 150 MB/s)</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/11-suricata.png" alt="Suricata 8.0.8, 패킷 9,997,874개 8.5GB를 226초에 분석, 평균 312.6 Mbit/s, eve.json 1351MB, 53,582개 룰 로드 성공 0개 실패" loading="lazy" />
+        <figcaption>룰 53,582개를 오류 없이 불러와 패킷 약 1,000만 개를 226초에 분석 (CPU 2개, 평균 313 Mbit/s)</figcaption>
+      </figure>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>설정</th><th>값과 이유</th></tr></thead>
+          <tbody>
+            <tr><td><code>HOME_NET</code></td><td><code>192.168.10.0/24</code>. 기본값(사설망 전체)이면 공격자 주소 172.16.0.1도 내부로 보여 "외부 → 내부" 룰이 동작하지 않음</td></tr>
+            <tr><td>출력</td><td><code>eve.json</code>에 경보와 흐름 기록만 남김 (그 외 로그는 꺼서 용량·시간 절약)</td></tr>
+            <tr><td><code>-k none</code></td><td>체크섬이 틀린 패킷도 버리지 않고 분석 (CIC pcap은 체크섬이 맞지 않는 패킷이 많음)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <figure class="screenshot">
+        <img src="images/12-eve.png" alt="eve.json 읽기 18초, 흐름 523,264개, 경보 1,410,309건, 서로 다른 룰 80개. TCP 346,124, UDP 177,038" loading="lazy" />
+        <figcaption>흐름 523,264개, 경보 1,410,309건</figcaption>
+      </figure>
+
+      <h3>경보 141만 건 중 99.9%는 공격 경보가 아니었음</h3>
+      <p>처음 결과에서 "전체 경보" 기준 DDoS 탐지율이 99.97%로 나와 이상해서 경보를 룰별로 나눠 봤습니다. <code>suricata-update</code>가 만든 룰 파일에는 ET 룰과 함께 <strong>Suricata 자체 프로토콜 이상 룰</strong>(sid 2200000–2299999)이 들어 있는데, 이것이 거의 전부였습니다.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>구분</th><th>경보 수</th><th>대표 룰</th></tr></thead>
+          <tbody>
+            <tr><td>Suricata 프로토콜 이상 룰</td><td class="num">1,408,549</td><td><code>TCPv4 invalid checksum</code> 1,390,304건 (정상 흐름에서 약 120만 건, DDoS 흐름에서 7.9만 건), HTTP 헤더 반복, 알 수 없는 Ethertype</td></tr>
+            <tr><td><strong>ET 룰</strong></td><td class="num"><strong>1,760</strong></td><td>ET SCAN, ET DOS, ET INFO, ET DNS 등</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>체크섬 경보는 <code>-k none</code>으로 체크섬 검사를 꺼도 룰 자체가 체크섬을 다시 계산해 냅니다. 패킷 품질 경보일 뿐 공격 판단이 아니므로, 이후 비교는 <strong>ET 룰만</strong> 셉니다. 실제 운영에서도 이런 경보는 <strong>억제(suppress)하지 않으면 진짜 경보가 묻히는</strong> 대표적인 소음입니다.</p>
+    </section>
+
+    <section>
+      <h2>3. 정답 라벨 붙이기 — 11%는 판정 불가로 제외</h2>
+      <p>CIC 라벨 파일(CICFlowMeter 기준)과 Suricata는 흐름을 나누는 방식이 달라서, <strong>양 끝 IP·포트 + 프로토콜</strong>이 같은 CIC 흐름들의 라벨을 모아 붙였습니다.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Suricata 흐름</th><th>개수</th><th>처리</th></tr></thead>
+          <tbody>
+            <tr><td>정상(BENIGN)</td><td class="num">266,083</td><td>비교에 사용</td></tr>
+            <tr><td>포트 스캔</td><td class="num">158,720</td><td>비교에 사용</td></tr>
+            <tr><td>DDoS</td><td class="num">38,087</td><td>비교에 사용</td></tr>
+            <tr><td>봇넷</td><td class="num">1,221</td><td>비교에 사용</td></tr>
+            <tr><td>모호 (정상·공격 라벨이 섞임)</td><td class="num">57,907</td><td>제외. 그중 56,788개가 <strong>"정상 + DDoS"</strong></td></tr>
+            <tr><td>CIC 파일에 없음 (ICMP, SCTP 등)</td><td class="num">1,246</td><td>제외</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="warn">같은 연결에 CIC가 "정상"과 "DDoS"를 모두 붙인 경우가 5만 6천 개였습니다. CICFlowMeter가 TCP 연결 종료 뒤 남은 패킷을 새 흐름으로 만들어 "정상"으로 표시하는 문제가 연구로 보고돼 있고(Engelen 외, 2021), 이 결과도 그와 맞아떨어집니다. 그래서 DDoS는 CIC 기준 128,027개 중 38,087개만 비교에 쓰였습니다.</p>
+    </section>
+
+    <section>
+      <h2>4. AI 학습</h2>
+      <p>흐름 464,111개를 공격 종류 비율대로 학습 60 / 검증 20 / 시험 20으로 나눴습니다. 모델 A는 CPU에서 6초, 모델 B는 T4 GPU에서 8 epoch 3.5초 만에 검증 AUC 1.0000이 나왔습니다.</p>
+      <figure class="screenshot">
+        <img src="images/13-mlp.png" alt="MLP 8 epoch: loss 0.0420에서 0.0037, val AUC 0.9998에서 1.0000" loading="lazy" />
+        <figcaption>모델 B 학습. 첫 epoch부터 AUC 0.9998 — 너무 쉽다는 신호라 무엇을 보고 판단했는지 확인함</figcaption>
+      </figure>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>순위</th><th>특성 (모델 A 순열 중요도)</th><th>AUC 하락</th><th>뜻</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td><code>bpp_ts</code> — 클라이언트→서버 패킷당 바이트</td><td class="num">0.1032</td><td>포트 스캔은 데이터 없이 SYN 하나(작은 패킷)만 보냄</td></tr>
+            <tr><td>2</td><td><code>flags_tc</code> — 서버→클라이언트 TCP 플래그</td><td class="num">0.0194</td><td>닫힌 포트는 RST로 응답</td></tr>
+            <tr><td>3</td><td><code>dest_port</code> — 목적지 포트</td><td class="num">0.0015</td><td>스캔은 평소 안 쓰는 포트로 감</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>사실상 <strong>"패킷 모양"</strong> 몇 가지로 갈렸습니다. 시험 공격 흐름의 80%가 포트 스캔이라, 이 실험에서 AI의 높은 점수는 상당 부분 "스캔 흐름은 모양이 뚜렷하다"는 데서 나왔습니다.</p>
+    </section>
+
+    <section>
+      <h2>5. 결과</h2>
+      <figure class="screenshot">
+        <img src="images/01-result-chart.png" alt="탐지율과 오탐률. ET 전체 0.12%/0.265%, ET 심각도1–2 0.10%/0.154%, ET 심각도1 0%/0.004%, 프로토콜 이상 룰 포함 19.38%/14.875%, A@0.1% 99.71%/0.023%, B@0.1% 99.78%/0.100%, A@룰과 같은 오탐 99.79%/0.092%, 하이브리드 99.71%/0.177%" loading="lazy" />
+        <figcaption>시험 집합 결과. 오탐률 축은 0–17%라 0.2% 미만 막대는 거의 보이지 않음</figcaption>
+      </figure>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>방식</th><th>흐름 탐지율</th><th>오탐률</th><th>잡은 공격 흐름</th><th>막힌 정상 흐름</th></tr></thead>
+          <tbody>
+            <tr><td>ET 전체</td><td class="num">0.12%</td><td class="num">0.265%</td><td class="num">46</td><td class="num">141</td></tr>
+            <tr><td>ET 심각도 1–2</td><td class="num">0.10%</td><td class="num">0.154%</td><td class="num">41</td><td class="num">82</td></tr>
+            <tr><td>ET 심각도 1</td><td class="num">0.00%</td><td class="num">0.004%</td><td class="num">0</td><td class="num">2</td></tr>
+            <tr class="ref"><td>(참고) 프로토콜 이상 룰 포함</td><td class="num">19.38%</td><td class="num">14.875%</td><td class="num">7,675</td><td class="num">7,916</td></tr>
+            <tr><td>A GBDT @ 오탐 1%</td><td class="num">100.00%</td><td class="num">1.075%</td><td class="num">39,605</td><td class="num">572</td></tr>
+            <tr><td>A GBDT @ 오탐 0.1%</td><td class="num">99.71%</td><td class="num">0.023%</td><td class="num">39,491</td><td class="num">12</td></tr>
+            <tr><td>A GBDT @ 룰과 같은 오탐</td><td class="num">99.79%</td><td class="num">0.092%</td><td class="num">39,522</td><td class="num">49</td></tr>
+            <tr><td>B MLP @ 오탐 0.1%</td><td class="num">99.78%</td><td class="num">0.100%</td><td class="num">39,519</td><td class="num">53</td></tr>
+            <tr class="hl"><td>하이브리드: ET 심각도 1–2 <strong>또는</strong> A @ 0.1%</td><td class="num">99.71%</td><td class="num">0.177%</td><td class="num">39,491</td><td class="num">94</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>시험 집합: 정상 53,217, 공격 39,606 흐름. 1단계와 달리 하이브리드가 AI 단독보다 나아지지 않았습니다. 룰이 잡은 공격 흐름은 모두 AI도 잡았고(룰만 잡은 경우 0건), 룰의 오탐 82건만 더해졌기 때문입니다.</p>
+
+      <h3>공격 종류별 — 룰은 공격을 "알아채기는" 했나</h3>
+      <p>IPS 룰은 스캔처럼 반복되는 행동에 <strong>몇 번에 한 번씩</strong> 경보를 내는 경우가 많아서, 흐름 단위로는 낮아도 운영자는 공격을 알아챌 수 있습니다. 그래서 전체 흐름 중 ET 경보가 하나라도 붙은 흐름과 그 룰을 따로 봤습니다.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>공격</th><th>전체 흐름</th><th>ET 경보가 붙은 흐름</th><th>경보를 낸 룰</th><th>운영자가 알아챘을까</th></tr></thead>
+          <tbody>
+            <tr><td>포트 스캔</td><td class="num">158,720</td><td class="num">179</td><td>ET SCAN Suspicious inbound to MSSQL 1433 / PostgreSQL 5432 / mySQL 3306</td><td>예 — DB 포트 스캔 경보</td></tr>
+            <tr><td>DDoS (LOIT)</td><td class="num">38,087</td><td class="num">10</td><td>ET DOS Terse HTTP GET Likely AnonMafiaIC DDoS tool</td><td>예 — 단, 3.8만 흐름 중 10건</td></tr>
+            <tr><td>봇넷 (ARES)</td><td class="num">1,221</td><td class="num">0</td><td>—</td><td><strong>아니요</strong> — 경보 없음</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>ET Open은 <strong>알려진 도구·취약점 공격의 시그니처</strong> 위주라, 포트 스캔·HTTP 플러드처럼 정상 요청과 모양이 같은 대량 트래픽이나 ARES 같은 맞춤형 봇넷 통신에는 걸릴 룰이 거의 없었습니다. 이런 공격은 보통 "초당 연결 수" 같은 <strong>임계값 룰</strong>로 잡습니다 — 3단계(DDoS)에서 다룰 주제입니다.</p>
+
+      <h3>정상 흐름에 난 ET 경보 — 튜닝 대상</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>룰</th><th>정상 흐름</th><th>심각도</th></tr></thead>
+          <tbody>
+            <tr><td>ET INFO GNU/Linux APT User-Agent (패키지 업데이트)</td><td class="num">343</td><td class="num">3</td></tr>
+            <tr><td>ET USER_AGENTS Microsoft Device Metadata Retrieval Client</td><td class="num">192</td><td class="num">3</td></tr>
+            <tr><td>ET INFO TLS Handshake Failure</td><td class="num">186</td><td class="num">2</td></tr>
+            <tr><td>ET DNS Query for .to TLD</td><td class="num">181</td><td class="num">2</td></tr>
+            <tr><td>ET INFO Observed DNS Query to .biz TLD</td><td class="num">99</td><td class="num">2</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>대부분 정보성·정책 경보입니다. 특히 "특정 최상위 도메인 DNS 조회"는 심각도 2라서 운영 기준(1–2)에도 들어옵니다. 실제 운영이라면 <code>threshold.config</code>의 suppress나 <code>disable.conf</code>로 끌 대상입니다.</p>
+    </section>
+
+    <section id="unseen">
+      <h2>6. 처음 보는 공격도 잡는가 — AI의 한계</h2>
+      <p>여기까지만 보면 AI가 압도적입니다. 하지만 이 AI는 <strong>같은 날, 같은 공격 도구의 흐름</strong>으로 학습하고 시험했습니다. 실제로는 새로운 공격이 먼저 오고 라벨은 나중에 생깁니다. 그래서 공격 종류 하나를 <strong>학습·검증 데이터에서 통째로 빼고</strong> 다시 학습한 뒤 그 공격을 얼마나 잡는지 봤습니다 (기준값: 오탐률 0.1%).</p>
+      <figure class="screenshot">
+        <img src="images/02-seen-unseen.png" alt="공격 종류별 탐지율. 포트 스캔: 룰 0.1%, 학습 포함 100%, 학습 제외 26.3%. DDoS: 룰 0.1%, 학습 포함 99.9%, 학습 제외 0%. 봇넷: 룰 0%, 학습 포함 55.3%, 학습 제외 0%" loading="lazy" />
+      </figure>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>공격</th><th>시험 흐름</th><th>ET 심각도 1–2</th><th>AI (학습에 포함)</th><th>AI (학습에서 뺌)</th></tr></thead>
+          <tbody>
+            <tr><td>포트 스캔</td><td class="num">31,744</td><td class="num">0.12%</td><td class="num">100.0%</td><td class="num">26.3%</td></tr>
+            <tr><td>DDoS (LOIT)</td><td class="num">7,618</td><td class="num">0.05%</td><td class="num">99.9%</td><td class="num">0.0%</td></tr>
+            <tr><td>봇넷 (ARES)</td><td class="num">244</td><td class="num">0.0%</td><td class="num">55.3%</td><td class="num">0.0%</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><strong>정상/공격을 배운 지도 학습 AI는 "본 적 있는 공격 모양"을 외운 것</strong>이었습니다. DDoS 흐름은 정상 HTTP 요청과 모양이 같아서, DDoS를 본 적 없는 모델은 하나도 잡지 못했습니다. 포트 스캔은 "작은 패킷 + RST 응답"이 다른 공격과 조금 겹쳐 26%만 잡혔습니다. 봇넷은 본 적이 있어도 55%에 그쳐 가장 어려웠고, 룰과 AI가 함께 놓친 115건 중 109건이 봇넷이었습니다.</p>
+    </section>
+
+    <section>
+      <h2>7. 결론과 주의할 점</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th></th><th>룰 (Suricata + ET Open)</th><th>지도 학습 AI</th></tr></thead>
+          <tbody>
+            <tr><td>잘 잡는 것</td><td>시그니처가 있는 알려진 도구·취약점 공격</td><td>학습 데이터에 있던 공격과 비슷한 흐름</td></tr>
+            <tr><td>못 잡는 것</td><td>정상과 모양이 같은 대량 트래픽, 맞춤형 봇넷 통신</td><td><strong>학습하지 않은 새 공격</strong> (0–26%)</td></tr>
+            <tr><td>준비물</td><td>룰 업데이트만 받으면 바로 동작</td><td>그 네트워크의 라벨 붙은 공격 데이터</td></tr>
+            <tr><td>운영 부담</td><td>패킷 품질·정보성 경보 억제 튜닝</td><td>새 공격마다 재학습, 판정 근거 설명 어려움</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note">1단계 WAF와 같은 방향의 결론입니다. <strong>룰과 AI는 서로 다른 것을 잡으므로 보완 관계</strong>이고, 이 실험에서 "AI 99.7%"는 공격 종류를 미리 알고 학습한 경우의 숫자입니다. 새 공격에 대비하려면 지도 학습보다 <strong>정상 트래픽만 배워 "평소와 다름"을 찾는 이상 탐지</strong>나 임계값 룰이 필요합니다.</p>
+      <div class="warn">
+        <p style="margin-top:0"><strong>이 숫자를 그대로 일반화하면 안 되는 이유</strong></p>
+        <ul style="margin-bottom:0">
+          <li>흐름 단위 탐지율은 룰에 불리합니다. 룰은 공격 하나에 경보 몇 건만 내도 운영자에게는 충분할 수 있습니다 (5장 공격 종류별 표).</li>
+          <li>같은 날 데이터를 무작위로 나눠서 학습·시험에 비슷한 공격 흐름이 함께 들어 있습니다. 6장의 "학습에서 뺀 공격"이 현실에 더 가깝습니다.</li>
+          <li>CIC-IDS2017 라벨에는 알려진 오류가 있고, 이 실험에서도 11%를 모호해서 뺐습니다.</li>
+          <li>무료 ET Open만 썼습니다. 유료 ET Pro나 직접 만든 임계값 룰을 쓰면 룰 쪽 결과는 달라집니다. ET 룰은 매일 바뀌므로 실행일의 룰 해시를 결과에 기록했습니다.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <h2>8. 다음 단계</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>순서</th><th>할 일</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>정상 흐름만 학습하는 이상 탐지 모델(Isolation Forest, 오토인코더)로 "처음 보는 공격" 다시 시험</td></tr>
+            <tr><td>2</td><td>다른 요일(목요일 웹 공격, 수요일 DoS·Heartbleed)로 반복 — 시그니처가 있는 공격에서는 룰이 어떻게 나오는지 확인</td></tr>
+            <tr><td>3</td><td>3단계 DDoS: 초당 연결·요청 수 임계값 룰 vs 시계열·흐름 모델 (CIC-DDoS2019)</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>황태운 · 시스템 인프라 운영 관리자</p>
+  </footer>
+</body>
+</html>
