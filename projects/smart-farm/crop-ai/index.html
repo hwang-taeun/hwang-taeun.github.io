@@ -50,6 +50,7 @@ title: 작물 질병 진단 앱 (crop-ai) — 스마트팜 하위 프로젝트
       <p><span class="badge b-personal">개인 프로젝트</span><span class="badge b-done">앱 완성</span><span class="badge b-done">모델 1차 학습</span><span class="badge b-wip">실제 사진 정확도 개선 필요</span></p>
       <p class="lead">토마토·감자·옥수수 잎 사진을 올리면 <strong>가능성 높은 병 3개와 확률</strong>을 알려주는 앱입니다. 앱 화면(React), 백엔드(Spring Boot), AI 추론 서버(FastAPI), 병 정보 DB(MySQL)를 <strong>모두 직접 만들었고</strong>, 회원가입부터 진단·기록·피드백까지 처음부터 끝까지 동작합니다.</p>
       <p class="note">모델은 공개 데이터셋(PlantVillage)을 <strong>Google Colab GPU</strong>에서 학습해 <strong>검증 정확도 93.8%</strong>(상위 3개 안에 정답 99.5%)가 나왔습니다. 하지만 이 점수는 실험실 배경 사진 기준이고, 인터넷의 실제 밭 사진으로 시험해 보니 <strong>학습하지 않은 병 사진에도 "모르겠다"고 하지 못하고 아는 병 이름을 높은 확률로 대는 한계</strong>가 확인됐습니다. 아래 <a href="#limits">4장</a>에 그대로 적었습니다.</p>
+      <p class="note">코드: <a href="https://github.com/hwang-taeun/crop-ai" target="_blank" rel="noopener">github.com/hwang-taeun/crop-ai</a> — AI 서버(FastAPI) · 백엔드(Spring Boot) · 앱 화면(React). 설치·실행 방법은 저장소 README에 있습니다.</p>
     </header>
 
     <section>
