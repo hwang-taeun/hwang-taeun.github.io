@@ -5,7 +5,7 @@ type: project
 anchor: security-ai-lab
 order: 190
 featured: true
-summary: 같은 트래픽을 룰 기반 보안 엔진(Coraza WAF, Suricata IPS)과 AI 모델에 넣어 탐지율·오탐률을 비교하는 Colab 실험 — WAF·IPS 완료
+summary: 같은 트래픽을 룰 기반 보안 엔진(Coraza WAF, Suricata IPS)과 AI 모델에 넣어 탐지율·오탐률을 비교하는 Colab 실험 — WAF·IPS·DDoS 3단계 완료
 problem: >-
   보안 장비는 대부분 시그니처(룰) 기반인데, "AI로 바꾸면 더 잘 잡는가"라는 질문에 숫자로 답해 본 적이 없었습니다.
   룰은 범위를 넓히면 오탐이 늘고, AI는 무엇을 근거로 막는지 알기 어렵다는 말만 있었습니다.
@@ -13,13 +13,15 @@ action: >-
   WAF·IPS·DDoS 세 단계로 나눠, 공개 데이터셋 하나를 룰 기반 엔진과 AI 모델에 똑같이 넣고 처음 보는 시험 집합에서만 비교하도록 Google Colab 노트북을 만들었습니다.
   1단계는 OWASP Coraza + CRS 4.25를 Go로 빌드해 요청 1만여 건을 편집증 수준 1–4로 채점하고, 같은 요청으로 TF-IDF 모델과 문자 단위 CNN(T4 GPU)을 학습했습니다.
   2단계는 CIC-IDS2017 pcap 8.8 GB를 Suricata 8.0.8 + ET Open으로 재생하고, Suricata가 만든 같은 흐름 기록으로 그래디언트 부스팅·MLP를 학습해 공격 종류를 하나씩 뺀 시험까지 했습니다.
+  3단계는 pcap 22 GB를 출발지 IP × 10초 구간으로 묶어 hashlimit·connlimit 방식의 임계값 룰과 AI를 비교했고, 잘못 붙은 라벨·서버가 볼 수 없는 연결·AI의 지름길 특성을 찾아 설계를 고쳤습니다.
 result: >-
   WAF는 같은 오탐률(0.03%)에서 CRS 27.3%, CNN 91.8%였지만 차이의 대부분은 "이 사이트에서만 비정상인 값"이었고 SQL 인젝션·XSS는 둘 다 거의 다 잡았습니다.
   IPS(Suricata + ET Open, 패킷 1,000만 개)는 룰 0.1%, AI 99.7%였지만, 공격 종류 하나를 학습에서 빼면 AI는 그 공격을 0–26%밖에 잡지 못했습니다.
-  룰은 시그니처가 있는 공격, 지도 학습 AI는 본 적 있는 공격을 잡는 보완 관계라는 결론을 얻었습니다.
+  DDoS는 임계값 룰도 97.8%를 잡았지만 정상 구간 13.9%를 막았고(80%가 내부 서버 1대), AI는 같은 탐지율에 오탐 0.09%였으며 느린 공격은 동시 연결 룰로만 잡혔습니다.
+  룰은 시그니처·양으로 드러나는 공격, 지도 학습 AI는 본 적 있거나 닮은 공격을 잡는 보완 관계라는 결론을 얻었습니다.
 skill_group: 보안 점검·하드닝
 skill_order: 60
-skill: 룰 기반 WAF(Coraza + OWASP CRS)·IPS(Suricata + ET Open) vs AI 탐지 비교 — Go 채점 도구, PyTorch, Colab GPU
+skill: 룰 기반 WAF(Coraza + OWASP CRS)·IPS(Suricata + ET Open)·DDoS(임계값) vs AI 탐지 비교 — Go 채점 도구, PyTorch, Colab GPU
 link_label: 룰 vs AI 비교 프로젝트 상세
 ---
 <!DOCTYPE html>
@@ -56,7 +58,7 @@ link_label: 룰 vs AI 비교 프로젝트 상세
     <header>
       <p class="tagline">개인 프로젝트 · 진행 중</p>
       <h1>룰 기반 vs AI 탐지 비교 — WAF · IPS · DDoS</h1>
-      <p><span class="badge b-personal">개인 프로젝트</span><span class="badge b-done">1단계 WAF 완료</span><span class="badge b-done">2단계 IPS 완료</span><span class="badge b-plan">3단계 DDoS 예정</span></p>
+      <p><span class="badge b-personal">개인 프로젝트</span><span class="badge b-done">1단계 WAF 완료</span><span class="badge b-done">2단계 IPS 완료</span><span class="badge b-done">3단계 DDoS 완료</span></p>
       <p class="lead">업무에서 쓰는 보안 장비는 대부분 <strong>룰(시그니처) 기반</strong>입니다. "AI로 바꾸면 더 잘 잡는가?"를 말이 아니라 숫자로 확인하려고, 같은 트래픽을 <strong>룰 엔진과 AI 모델에 똑같이 넣고</strong> 탐지율과 오탐률을 나란히 비교합니다. 학습은 GPU가 없는 개인 PC 대신 <strong>Google Colab의 T4 GPU</strong>에서 하고, 노트북 하나를 "모두 실행"하면 같은 결과가 다시 나오도록 만들었습니다.</p>
     </header>
 
@@ -70,10 +72,10 @@ link_label: 룰 vs AI 비교 프로젝트 상세
         <strong>2단계 · IPS — Suricata 8.0.8 + ET Open vs AI <span class="badge b-done">완료</span></strong>
         <span>CIC-IDS2017 금요일 pcap(패킷 1,000만 개)을 Suricata로 재생해 같은 흐름 단위로 비교. ET 룰 흐름 탐지율 0.1% vs AI 99.7%, 하지만 학습에서 뺀 공격은 AI도 0–26%. 경보 141만 건 중 99.9%가 패킷 품질 경보였던 점도 정리 →</span>
       </a>
-      <div class="subproject">
-        <strong>3단계 · DDoS — 임계값 룰 vs AI <span class="badge b-plan">예정</span></strong>
-        <span>CIC-DDoS2019 일부로 "초당 요청 수·연결 수 기준" 같은 고정 임계값 룰과 시계열·흐름 모델 비교</span>
-      </div>
+      <a class="subproject" href="ddos/index.html">
+        <strong>3단계 · DDoS — 임계값 룰(hashlimit·connlimit 방식) vs AI <span class="badge b-done">완료</span></strong>
+        <span>CIC-IDS2017 수요일·금요일 pcap 22 GB를 출발지 IP × 10초 구간으로 비교. 룰 기본값 97.8% 탐지·오탐 13.9%(80%가 내부 서버 1대), AI 97.8%·오탐 0.09%. 느린 공격은 동시 연결 룰로만 잡힘. 라벨 오류·AI 지름길을 찾아 고친 과정 포함 →</span>
+      </a>
     </section>
 
     <section>
@@ -90,7 +92,17 @@ link_label: 룰 vs AI 비교 프로젝트 상세
           </tbody>
         </table>
       </div>
-      <p class="note">지금까지의 결론: <strong>룰</strong>은 시그니처가 있는 공격을 학습 없이 잡고, 왜 막았는지 룰 ID로 설명할 수 있습니다(WAF의 SQLi·XSS ≈100%). <strong>지도 학습 AI</strong>는 그 환경에서 본 적 있는 공격·이상 패턴을 매우 잘 잡지만(IPS 99.7%), 처음 보는 공격에는 약합니다(0–26%). 대체가 아니라 함께 쓰는 관계입니다.</p>
+      <p class="note">세 단계의 결론: <strong>룰</strong>은 시그니처가 있는 공격(WAF의 SQLi·XSS ≈100%)과 양으로 드러나는 공격(DDoS 임계값 97.8%)을 학습 없이 잡고, 왜 막았는지 설명할 수 있습니다. 대신 범위를 넓히면 정상 사용자도 막습니다. <strong>지도 학습 AI</strong>는 본 적 있는 공격을 매우 잘 잡지만, 처음 보는 공격은 배운 공격과 닮았을 때만 잡습니다(IPS 0–26% vs DDoS 88–100%). 대체가 아니라 함께 쓰는 관계입니다.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>단계</th><th>룰</th><th>AI</th><th>핵심 발견</th></tr></thead>
+          <tbody>
+            <tr><td><a href="waf/index.html">WAF</a></td><td>27.3% (오탐 0.03%)</td><td>91.8% (오탐 0.03%)</td><td>차이는 "사이트 전용 비정상 값". 실제 공격은 둘 다 ≈100%</td></tr>
+            <tr><td><a href="ips/index.html">IPS</a></td><td>0.1% (ET 심각도 1–2)</td><td>99.7% / 처음 본 공격 0–26%</td><td>경보 99.9%가 패킷 품질 경보. AI는 본 공격만 잡음</td></tr>
+            <tr><td><a href="ddos/index.html">DDoS</a></td><td>97.8% (오탐 13.9%)</td><td>97.8% (오탐 0.09%)</td><td>느린 공격은 동시 연결 룰로만. 오탐은 내부 서버 예외 처리로 해결할 문제</td></tr>
+          </tbody>
+        </table>
+      </div>
     </section>
   </main>
 

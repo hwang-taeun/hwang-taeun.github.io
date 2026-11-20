@@ -1,0 +1,242 @@
+---
+title: 3단계 DDoS — 임계값 룰 vs AI 탐지 비교
+---
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>3단계 DDoS — 임계값 룰 vs AI 탐지 비교 — 황태운</title>
+  <meta name="description" content="CIC-IDS2017 수요일·금요일 pcap(22 GB)을 출발지 IP × 10초 구간으로 묶어, hashlimit·connlimit 방식의 임계값 룰과 AI 모델(GBDT, MLP)의 DoS/DDoS 탐지율·오탐률·탐지 시간을 비교한 실험" />
+  <meta name="theme-color" content="#1a73e8" />
+  <link rel="stylesheet" href="../../../assets/style.css" />
+  <style>
+    .table-wrap { overflow-x: auto; margin: 0.6rem 0 1rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+    th, td { border: 1px solid var(--border); padding: 0.5rem 0.7rem; text-align: left; vertical-align: top; }
+    th { background: var(--accent-soft); color: var(--accent); font-weight: 700; white-space: nowrap; }
+    td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    tr.hl td { background: rgba(27,175,122,0.08); font-weight: 600; }
+    .note { border-left: 4px solid var(--accent); background: var(--accent-soft); padding: 0.7rem 1rem; border-radius: 0 8px 8px 0; margin: 0.8rem 0; }
+    .warn { border-left: 4px solid #d93025; background: rgba(217,48,37,0.08); padding: 0.7rem 1rem; border-radius: 0 8px 8px 0; margin: 0.8rem 0; }
+    .plan { border-left: 4px solid #e8710a; background: rgba(232,113,10,0.08); padding: 0.7rem 1rem; border-radius: 0 8px 8px 0; margin: 0.8rem 0; }
+    .screenshot { margin: 0.8rem 0 1.2rem; }
+    .screenshot img { display: block; max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 8px; }
+    .screenshot figcaption { margin-top: 0.4rem; color: var(--muted); font-size: 0.88rem; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.8rem; margin: 0.8rem 0 1rem; }
+    .stat { border: 1px solid var(--border); border-radius: 10px; padding: 0.7rem 0.9rem; }
+    .stat b { display: block; font-size: 1.5rem; color: var(--accent); font-variant-numeric: tabular-nums; }
+    .stat span { color: var(--muted); font-size: 0.88rem; }
+    section h3 { font-size: 1.05rem; margin-top: 1.5rem; }
+    .badge { display: inline-block; font-size: 0.82rem; font-weight: 700; padding: 0.12rem 0.55rem; border-radius: 999px; margin-right: 0.3rem; }
+    .b-personal { background: #e6f4ea; color: #188038; }
+    .b-done { background: var(--accent-soft); color: var(--accent); }
+  </style>
+</head>
+<body>
+  <main>
+    <a href="../" class="back-link">← 룰 vs AI 비교 프로젝트로</a>
+
+    <header>
+      <p class="tagline">개인 프로젝트 · 룰 기반 vs AI 탐지 비교 3단계</p>
+      <h1>DDoS — 임계값 룰 vs AI</h1>
+      <p><span class="badge b-personal">개인 프로젝트</span><span class="badge b-done">Colab 실행 완료</span></p>
+      <p class="lead">2단계에서 시그니처 룰(ET Open)은 DDoS를 거의 잡지 못했습니다. DoS/DDoS는 보통 시그니처가 아니라 <strong>"IP당 초당 새 연결 수 · 동시 연결 수" 임계값</strong>으로 막습니다. 그래서 iptables <code>hashlimit</code>·<code>connlimit</code>과 같은 방식의 룰 2개를 만들고, 같은 트래픽을 <strong>출발지 IP × 10초 구간</strong>으로 묶어 AI와 비교했습니다.</p>
+      <div class="stats">
+        <div class="stat"><b>97.8%</b><span>임계값 룰 기본값 탐지율 — 대신 정상 구간 13.9% 차단</span></div>
+        <div class="stat"><b>86.8%</b><span>오탐 0.25%로 맞춘 룰 탐지율</span></div>
+        <div class="stat"><b>97.8%</b><span>AI 탐지율 (오탐 0.09%)</span></div>
+        <div class="stat"><b>0초</b><span>기본 룰·AI 모두 공격 첫 10초 구간에 탐지</span></div>
+      </div>
+      <p class="note">DoS/DDoS는 "연결이 비정상적으로 많다"는 뚜렷한 흔적을 남겨서 <strong>룰과 AI 모두 잘 잡았습니다.</strong> 차이는 <strong>정상 사용자를 덜 막는 정도</strong>에서 났습니다. 기본 임계값은 정상 구간의 13.9%를 막았고 그중 80%는 내부 서버 한 대(192.168.10.3)였습니다. 또 느린 공격(slowloris 등)은 <strong>"동시 연결 수" 룰로만</strong> 잡혀서, 흔히 거는 "초당 연결·요청 수" 제한만으로는 부족했습니다.</p>
+    </header>
+
+    <section>
+      <h2>1. 실험 구성</h2>
+      <figure class="screenshot">
+        <img src="images/00-pipeline.png" alt="CIC-IDS2017 수요일 13.42GB·금요일 8.84GB pcap → Suricata 8.0.8로 연결 기록 99만 개 → 출발지 IP × 10초 구간 28,247개, CIC 공격 일정표로 라벨 → 60/20/20 분할 → 임계값 룰 R1·R2와 AI(GBDT, HTTP 비율 제외 GBDT, MLP) 비교" loading="lazy" />
+      </figure>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>구분</th><th>사용한 것</th><th>이유</th></tr></thead>
+          <tbody>
+            <tr><td>데이터</td><td>CIC-IDS2017 수요일(DoS Hulk·GoldenEye·slowloris·Slowhttptest)·금요일(DDoS LOIT) 원본 pcap</td><td>홍수형과 느린 공격이 모두 들어 있음. 2단계와 같은 공개 미러에서 받을 수 있음</td></tr>
+            <tr><td>연결 기록</td><td>Suricata 8.0.8을 탐지 룰 없이 실행해 연결(흐름) 기록만 생성</td><td>연결 시작·끝 시각, 방향별 패킷·바이트, TCP 플래그를 얻기 위함</td></tr>
+            <tr><td>판정 단위</td><td><strong>출발지 IP × 10초 구간</strong></td><td>임계값 룰은 "이 IP가 지금 너무 많이 붙는다 → 이 IP를 막는다"로 동작</td></tr>
+            <tr><td>룰 R1</td><td>한 서버로 새 연결 ≥ <strong>초당 10개</strong> (10초에 100개)</td><td>iptables <code>hashlimit</code>, nginx <code>limit_req</code>와 같은 방식</td></tr>
+            <tr><td>룰 R2</td><td>한 서버에 동시 연결 ≥ <strong>50개</strong></td><td>iptables <code>connlimit</code>, nginx <code>limit_conn</code>과 같은 방식</td></tr>
+            <tr><td>AI</td><td>구간 통계 17개(연결 수, 목적지 수, 응답 없는 연결 비율, 지속 시간, 바이트 등) + GBDT(CPU) / MLP(T4 GPU)</td><td>IP 주소와 시각은 넣지 않음</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>룰은 두 가지로 비교했습니다. <strong>기본값</strong>은 관리자가 처음 흔히 거는 값이고, <strong>튜닝값</strong>은 AI 기준값과 똑같이 검증 집합에서 정상 구간 오탐률이 0.1%가 되도록 올린 값입니다 (새 연결 10초에 393개, 동시 연결 335개).</p>
+      <p>노트북: <a href="ddos_lab_phase3.ipynb" download><code>ddos_lab_phase3.ipynb</code></a> (Colab T4 GPU, 처음부터 약 30분, pcap 22 GB)</p>
+    </section>
+
+    <section>
+      <h2>2. 실행하며 고친 세 가지</h2>
+      <p>이번 단계는 결과를 보고 설계를 세 번 고쳤습니다. 숫자보다 이 과정이 더 중요한 배움이었습니다.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>발견한 문제</th><th>증상</th><th>고친 방법</th></tr></thead>
+          <tbody>
+            <tr><td><strong>라벨이 엉뚱한 공격에 붙음</strong></td><td>CIC 원본 slowloris 흐름 5,796개가 2개로, GoldenEye 10,293개가 94,006개로 바뀜. 공격자가 하루 동안 같은 출발 포트를 여러 공격에 다시 써서, IP·포트만으로 맞추면 공격끼리 섞임</td><td>CIC가 공개한 <strong>공격 일정표</strong>(현지 시각 UTC−3)와 공격자 172.16.0.1 → 웹서버 192.168.10.50 조건으로 구간 라벨을 붙임. 공격 시간 안과 직전 같은 길이 시간의 연결 수를 비교해 일정표가 맞는지 검증 (slowloris 3,894 vs 0, DDoS 95,683 vs 0)</td></tr>
+            <tr><td><strong>룰이 서버가 볼 수 없는 연결까지 셈</strong></td><td>기본 룰 오탐 25.5%. 직원 PC의 웹 브라우징·DNS까지 합쳐 "동시 연결 50개"를 넘음</td><td>서버에 거는 룰은 자기에게 온 연결만 셈 → <strong>한 서버(목적지 IP) 기준</strong>으로 다시 계산. 오탐 25.5% → 13.9%</td></tr>
+            <tr><td><strong>AI가 지름길을 씀</strong></td><td>모델 A 중요도 1위가 "구간 중 HTTP 연결 비율". 정상 구간 평균 3%, 공격 구간 59–100%. 이 데이터에서는 웹서버에 평문 HTTP로 오는 정상 트래픽이 거의 없음</td><td>HTTP 비율을 뺀 <strong>모델 A'</strong>를 따로 학습해 비교. 탐지율 98.9% → 97.8%로 거의 같아, 지름길 없이도 연결 수·지속 시간으로 구분됨을 확인</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>이 밖에 두 날짜를 합치자 라벨 붙이는 단계가 한 시간 넘게 끝나지 않았는데, 연결 백만 개마다 파이썬 함수를 부르던 부분을 표 전체 연산으로 바꿔 <strong>17초</strong>로 줄였습니다.</p>
+    </section>
+
+    <section>
+      <h2>3. 결과</h2>
+      <figure class="screenshot">
+        <img src="images/01-result-chart.png" alt="탐지율과 오탐률. 룰 기본값 97.8%/13.869%, 룰 튜닝값 86.8%/0.252%, A 98.9%/0.054%, A' 97.8%/0.090%, B 96.7%/0.018%, 하이브리드 98.9%/0.306%" loading="lazy" />
+        <figcaption>시험 집합 전체 결과 (정상 5,559 / DoS·DDoS 91 구간)</figcaption>
+      </figure>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>방식</th><th>탐지율</th><th>오탐률</th><th>놓친 공격 구간</th><th>막힌 정상 구간</th></tr></thead>
+          <tbody>
+            <tr><td>R1 새 연결 (기본)</td><td class="num">52.7%</td><td class="num">3.26%</td><td class="num">43</td><td class="num">181</td></tr>
+            <tr><td>R2 동시 연결 (기본)</td><td class="num">96.7%</td><td class="num">11.15%</td><td class="num">3</td><td class="num">620</td></tr>
+            <tr><td>R1 또는 R2 (기본)</td><td class="num">97.8%</td><td class="num">13.87%</td><td class="num">2</td><td class="num">771</td></tr>
+            <tr><td>R1 또는 R2 (튜닝)</td><td class="num">86.8%</td><td class="num">0.25%</td><td class="num">12</td><td class="num">14</td></tr>
+            <tr><td>A GBDT @ 오탐 0.1%</td><td class="num">98.9%</td><td class="num">0.05%</td><td class="num">1</td><td class="num">3</td></tr>
+            <tr><td>A' GBDT (HTTP 비율 제외) @ 오탐 0.1%</td><td class="num">97.8%</td><td class="num">0.09%</td><td class="num">2</td><td class="num">5</td></tr>
+            <tr><td>B MLP @ 오탐 0.1%</td><td class="num">96.7%</td><td class="num">0.02%</td><td class="num">3</td><td class="num">1</td></tr>
+            <tr class="hl"><td>하이브리드: 튜닝 룰 <strong>또는</strong> A</td><td class="num">98.9%</td><td class="num">0.31%</td><td class="num">1</td><td class="num">17</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>웹서버 관리자 입장에서 보면</h3>
+      <p>위 표의 정상 구간에는 웹서버에 접속하지 않은 PC도 들어 있습니다. 피해 웹서버(192.168.10.50)로 연결한 구간만 골라 보면, 실제 서버 관리자가 판단하게 되는 상황에 가깝습니다.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>웹서버로 간 시험 구간 (정상 481 / 공격 91)</th><th>탐지율</th><th>오탐률</th><th>막힌 정상 구간</th></tr></thead>
+          <tbody>
+            <tr><td>R1 또는 R2 (기본)</td><td class="num">97.8%</td><td class="num">2.08%</td><td class="num">10</td></tr>
+            <tr><td>R1 또는 R2 (튜닝)</td><td class="num">86.8%</td><td class="num">0.21%</td><td class="num">1</td></tr>
+            <tr><td>A GBDT</td><td class="num">98.9%</td><td class="num">0.00%</td><td class="num">0</td></tr>
+            <tr><td>A' GBDT (HTTP 비율 제외)</td><td class="num">97.8%</td><td class="num">0.00%</td><td class="num">0</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <figure class="screenshot">
+        <img src="images/03-roc.png" alt="ROC 곡선. A·A'·B는 AUC 0.991–0.996으로 왼쪽 위, R2 동시 연결 임계값 곡선이 R1 새 연결 곡선보다 위, 룰 기본값 점은 오탐 약 14%, 튜닝값 점은 오탐 0.25% 탐지 87%" loading="lazy" />
+        <figcaption>Colab에서 그린 ROC. 회색 점선은 임계값을 바꿔 가며 그린 룰 곡선 — 동시 연결(R2)이 새 연결(R1)보다 항상 위</figcaption>
+      </figure>
+
+      <h3>공격 종류별 — 홍수형 vs 느린 공격</h3>
+      <figure class="screenshot">
+        <img src="images/02-by-attack.png" alt="공격 종류별 탐지율. DDoS·GoldenEye는 모든 방식 100%. Hulk: R1 88, R2 94, 튜닝 88, AI 100. Slowhttptest: R1 18, R2 88, 튜닝 47, AI 88. slowloris: R1 0, R2 100, 튜닝 96, AI 100" loading="lazy" />
+      </figure>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>공격</th><th>10초당 새 연결 (중앙값)</th><th>동시 연결 (중앙값)</th><th>연결 평균 지속</th><th>잡은 룰</th></tr></thead>
+          <tbody>
+            <tr><td>DDoS (LOIT)</td><td class="num">823</td><td class="num">524</td><td class="num">6.8초</td><td>R1·R2 모두</td></tr>
+            <tr><td>Hulk</td><td class="num">2,449</td><td class="num">88</td><td class="num">0.7초</td><td>R1·R2 모두 — 짧은 연결을 쏟아부어 동시 연결도 88개</td></tr>
+            <tr><td>GoldenEye</td><td class="num">240</td><td class="num">749</td><td class="num">11.0초</td><td>R1·R2 모두</td></tr>
+            <tr><td>Slowhttptest</td><td class="num">2</td><td class="num">334</td><td class="num">52.4초</td><td><strong>R2만</strong> — 새 연결은 정상 수준</td></tr>
+            <tr><td>slowloris</td><td class="num">25</td><td class="num">430</td><td class="num">61.6초</td><td><strong>R2만</strong> (R1은 0%)</td></tr>
+            <tr><td><em>정상</em></td><td class="num">2</td><td class="num">1</td><td class="num">1.3초</td><td>—</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>느린 공격은 연결을 몇 개만 열고 헤더를 아주 천천히 보내 서버의 연결 슬롯을 붙잡습니다. 그래서 <strong>초당 연결 수 제한(R1)만 걸어 두면 slowloris는 하나도 막지 못합니다.</strong> 반대로 튜닝으로 동시 연결 기준을 335개까지 올리자 Slowhttptest 탐지가 88% → 47%로 떨어졌습니다.</p>
+
+      <h3>기본 룰에 막힌 정상 사용자</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>정상 IP</th><th>막힌 구간</th><th>한 서버로 10초 최대 새 연결</th><th>최대 동시 연결</th></tr></thead>
+          <tbody>
+            <tr><td>192.168.10.3 (내부 서버)</td><td class="num">3,113</td><td class="num">356</td><td class="num">368</td></tr>
+            <tr><td>192.168.10.5</td><td class="num">121</td><td class="num">319</td><td class="num">157</td></tr>
+            <tr><td>192.168.10.8</td><td class="num">113</td><td class="num">775</td><td class="num">388</td></tr>
+            <tr><td>그 외 10개 PC</td><td class="num">550</td><td class="num">—</td><td class="num">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>오탐 구간 3,897개 중 <strong>80%가 내부 서버 192.168.10.3 한 대</strong>였습니다. 실무라면 임계값을 올리기보다 이 서버를 <strong>예외(화이트리스트)로 빼는 것</strong>이 맞습니다. 임계값을 일괄로 올린 "튜닝값"은 오탐은 줄였지만 느린 공격을 놓치기 시작했습니다.</p>
+
+      <h3>탐지까지 걸린 시간</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>공격 (지속)</th><th>룰 기본값</th><th>룰 튜닝값</th><th>AI (A)</th></tr></thead>
+          <tbody>
+            <tr><td>DDoS LOIT (20분)</td><td class="num">0초</td><td class="num">10초</td><td class="num">0초</td></tr>
+            <tr><td>GoldenEye (10분)</td><td class="num">0초</td><td class="num">120초</td><td class="num">0초</td></tr>
+            <tr><td>Hulk (18분)</td><td class="num">0초</td><td class="num">0초</td><td class="num">0초</td></tr>
+            <tr><td>Slowhttptest (20분)</td><td class="num">0초</td><td class="num">0초</td><td class="num">0초</td></tr>
+            <tr><td>slowloris (22분)</td><td class="num">0초</td><td class="num">50초</td><td class="num">0초</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>"0초"는 공격의 첫 10초 구간에서 바로 잡았다는 뜻입니다. 높게 올린 임계값은 공격이 충분히 커질 때까지 기다리게 됩니다.</p>
+    </section>
+
+    <section>
+      <h2>4. 처음 보는 공격 — 2단계와 반대 결과</h2>
+      <p>2단계(IPS)에서 AI는 학습에서 뺀 공격을 0–26%밖에 잡지 못했습니다. 이번에도 공격 종류 하나씩 빼고 학습해 봤습니다.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>공격</th><th>시험 구간</th><th>A (학습에 포함)</th><th>A (학습에서 뺌)</th><th>A' (학습에서 뺌)</th><th>룰 기본값</th></tr></thead>
+          <tbody>
+            <tr><td>DDoS</td><td class="num">24</td><td class="num">100%</td><td class="num">100%</td><td class="num">100%</td><td class="num">100%</td></tr>
+            <tr><td>GoldenEye</td><td class="num">7</td><td class="num">100%</td><td class="num">100%</td><td class="num">100%</td><td class="num">100%</td></tr>
+            <tr><td>Hulk</td><td class="num">16</td><td class="num">100%</td><td class="num">100%</td><td class="num">100%</td><td class="num">100%</td></tr>
+            <tr><td>Slowhttptest</td><td class="num">17</td><td class="num">94.1%</td><td class="num">94.1%</td><td class="num">88.2%</td><td class="num">88.2%</td></tr>
+            <tr><td>slowloris</td><td class="num">27</td><td class="num">100%</td><td class="num">100%</td><td class="num">100%</td><td class="num">100%</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>이번에는 처음 보는 공격도 거의 다 잡았습니다. DoS 계열은 도구가 달라도 <strong>"한 서버에 연결이 비정상적으로 많고 오래 열려 있다"는 공통 모양</strong>이 있어서, 다른 DoS 공격으로 배운 모델이 그대로 통했습니다. 반면 2단계의 포트 스캔·DDoS·봇넷은 서로 모양이 전혀 달랐습니다. <strong>AI가 새 공격을 잡을 수 있는지는 "새 공격이 이미 배운 공격과 닮았는가"에 달려 있다</strong>는 것이 두 실험을 합친 결론입니다.</p>
+    </section>
+
+    <section>
+      <h2>5. 결론과 주의할 점</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th></th><th>임계값 룰</th><th>AI</th></tr></thead>
+          <tbody>
+            <tr><td>탐지</td><td>느린 공격은 R2(동시 연결)로만 잡힘 — 둘 다 걸면 97.8%</td><td>97.8–98.9%, 학습에서 뺀 DoS도 88–100%</td></tr>
+            <tr><td>오탐</td><td>기본값 13.9% (80%가 내부 서버 1대) → 예외 처리 필요</td><td>0.02–0.09%</td></tr>
+            <tr><td>설명·운영</td><td>"초당 393개 초과"처럼 이유가 분명하고 iptables·nginx로 바로 적용</td><td>점수만 남음. 정상 트래픽이 바뀌면 다시 학습</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note">세 단계 중 룰과 AI의 차이가 가장 작았습니다. DoS는 숨기기 어려운 "양"의 공격이라 단순한 임계값으로도 잘 잡히고, AI의 이득은 주로 <strong>정상 사용자를 덜 막는 것</strong>이었습니다. 실무라면 <strong>R1·R2를 함께 걸고, 많이 접속하는 내부 서버는 예외 처리</strong>하는 것만으로 대부분을 얻을 수 있고, AI는 그 위에서 오탐을 줄이는 보조 판단으로 쓰는 것이 현실적입니다.</p>
+      <div class="warn">
+        <p style="margin-top:0"><strong>이 숫자를 그대로 일반화하면 안 되는 이유</strong></p>
+        <ul style="margin-bottom:0">
+          <li>공격 구간이 455개(시험 91개)로 적고, 공격자가 NAT 뒤 IP 하나(172.16.0.1)라 진짜 분산 공격(수천 개 IP가 각각 조금씩)과는 다릅니다. 그런 공격은 IP별 임계값으로는 막기 어렵습니다.</li>
+          <li>라벨은 공개 일정표 기준이라 공격 시간 안의 정상 연결이나 시계 오차가 섞일 수 있습니다 (시작·끝 ±2분은 제외).</li>
+          <li>같은 날 안에서 무작위로 나눠, 비슷한 구간이 학습과 시험에 함께 들어 있습니다.</li>
+          <li>이 데이터에는 웹서버로 가는 정상 HTTP가 거의 없어 AI가 쓸 수 있는 지름길이 있었습니다 (A'로 확인).</li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <h2>6. 다음 단계</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>순서</th><th>할 일</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>192.168.10.3을 예외 처리한 뒤 기본 임계값 룰을 다시 평가 — "튜닝 = 임계값 올리기"가 아니라 "예외 처리"일 때의 결과</td></tr>
+            <tr><td>2</td><td>수천 개 IP로 나뉜 반사·증폭 공격이 있는 CIC-DDoS2019로 IP별 임계값의 한계 확인</td></tr>
+            <tr><td>3</td><td>세 단계 결과를 한 장으로 정리 — 공격 종류별로 룰과 AI 중 무엇이 맞는지</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>황태운 · 시스템 인프라 운영 관리자</p>
+  </footer>
+</body>
+</html>
