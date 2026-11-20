@@ -13,7 +13,7 @@ Linux·Windows Server 운영을 바탕으로 **보안 점검·하드닝, 장애 
 |--------|------|
 | 메인 | https://hwang-taeun.github.io/ |
 | 스킬 상세 | https://hwang-taeun.github.io/skill.html |
-| 대표 프로젝트 | https://hwang-taeun.github.io/projects.html |
+| 대표 프로젝트 · AI 활용 | https://hwang-taeun.github.io/projects.html |
 | 이력서 (PDF) | https://hwang-taeun.github.io/assets/resume.pdf |
 
 ---
@@ -34,7 +34,6 @@ Linux·Windows Server 운영을 바탕으로 **보안 점검·하드닝, 장애 
 - Let's Encrypt (HTTP-01 / DNS-01, acme.sh), Cloudflare DNS API 자동화
 - [DNS 레코드 정리](https://hwang-taeun.github.io/skills/dns-records/) · [SPF 메일 인증](https://hwang-taeun.github.io/skills/spf-mail-auth/)
 - [사내 재귀 DNS (Unbound · Windows DNS)](https://hwang-taeun.github.io/skills/dns-resolver/)
-- [Ollama 로컬 LLM 구축 및 웹 연동](https://hwang-taeun.github.io/skills/ollama/)
 
 ### 고가용성(HA) & 컨테이너
 - MariaDB Galera, Pacemaker, Podman·kind (대표 프로젝트 참고)
@@ -59,6 +58,12 @@ Linux·Windows Server 운영을 바탕으로 **보안 점검·하드닝, 장애 
 - Bash(백업, 로그 순환, 서비스·포트 점검), PowerShell(이벤트 감시, 시간 동기화), Python
 - rsync, inotify, systemd 타이머, crontab
 - [Ansible 서버 자동화](https://hwang-taeun.github.io/skills/ansible/) · [프라이빗 Git 서버 (Apache Smart HTTP)](https://hwang-taeun.github.io/skills/git-server/)
+- [KISA 보호나라 보안공지 모니터링 (Python 크롤링 + 메일 알림)](https://hwang-taeun.github.io/skills/kisa-boho-monitor/)
+
+### AI 활용
+- [Google Colab (GPU 런타임으로 모델 학습·실험 재현)](https://hwang-taeun.github.io/skills/google-colab/)
+- [Ollama 로컬 LLM 구축 및 웹 연동](https://hwang-taeun.github.io/skills/ollama/)
+- 스마트팜 작물 질병 진단(crop-ai), 룰 기반 vs AI 보안 탐지 비교 (아래 AI 활용 프로젝트 참고)
 
 ---
 
@@ -84,14 +89,23 @@ Linux·Windows Server 운영을 바탕으로 **보안 점검·하드닝, 장애 
 
 전체 목록은 [대표 프로젝트](https://hwang-taeun.github.io/projects.html) 페이지에서 볼 수 있습니다.
 
+## 🤖 AI 활용 프로젝트
+
+| 프로젝트 | 설명 |
+|----------|------|
+| [스마트팜 질병 감시 · 토양 관리 (개인)](https://hwang-taeun.github.io/projects/smart-farm/) | 라즈베리 파이 센서·카메라와 로컬 AI 서버, 잎 사진 질병 진단 앱(crop-ai) |
+| [룰 기반 vs AI 보안 탐지 비교 (개인)](https://hwang-taeun.github.io/projects/security-ai-lab/) | Coraza WAF · Suricata IPS · DDoS 임계값 룰과 AI를 같은 트래픽으로 비교 (Colab GPU) — 노트북·결과: [security-ai-lab](https://github.com/hwang-taeun/security-ai-lab) |
+
+[전체 프로젝트 페이지의 AI 활용 섹션](https://hwang-taeun.github.io/projects.html#ai)
+
 ---
 
 ## 📂 저장소 구조
 
 ```text
-├── index.html          # 메인 (대표 프로젝트 자동 표시)
+├── index.html          # 메인 (대표 프로젝트 · AI 활용 자동 표시)
 ├── skill.html          # 스킬 목록 (skills/·projects/ 머리말에서 자동 생성)
-├── projects.html       # 프로젝트 목록 (projects/ 머리말에서 자동 생성)
+├── projects.html       # 프로젝트 목록 (projects/ 머리말에서 자동 생성, category: ai 는 AI 활용 섹션)
 ├── assets/
 │   ├── style.css       # 공통 스타일
 │   └── resume.pdf      # 이력서
@@ -102,13 +116,14 @@ Linux·Windows Server 운영을 바탕으로 **보안 점검·하드닝, 장애 
 └── projects/
     └── <주제>/
         ├── index.html  # 머리말: type: project, title, order, featured, summary, problem, action, result
+        │               #         (AI 프로젝트는 category: ai 추가)
         └── images/
 ```
 
 ### 페이지 추가 방법
-1. `skills/<주제>/` 또는 `projects/<주제>/` 폴더에 `index.html`과 `images/`를 넣습니다.
-2. `index.html` 맨 위 머리말(Front Matter)에 그룹·순서·요약을 적습니다.
-3. push 하면 GitHub Pages(Jekyll)가 `skill.html`, `projects.html`, 메인 목록을 자동으로 다시 만듭니다.
+. `skills/<주제>/` 또는 `projects/<주제>/` 폴더에 `index.html`과 `images/`를 넣습니다.
+. `index.html` 맨 위 머리말(Front Matter)에 그룹·순서·요약을 적습니다.
+. push 하면 GitHub Pages(Jekyll)가 `skill.html`, `projects.html`, 메인 목록을 자동으로 다시 만듭니다.
 
 ### 로컬 미리보기
 ```bash
