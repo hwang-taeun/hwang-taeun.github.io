@@ -1,0 +1,278 @@
+---
+title: 1단계 WAF — OWASP Coraza + CRS vs AI 탐지 비교
+---
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>1단계 WAF — OWASP Coraza + CRS vs AI 탐지 비교 — 황태운</title>
+  <meta name="description" content="CSIC 2010 HTTP 요청 데이터로 OWASP Coraza v3.8.1 + CRS 4.25(편집증 수준 1–4)와 TF-IDF 로지스틱 회귀, 문자 단위 CNN(Colab T4 GPU)의 탐지율·오탐률을 같은 시험 집합에서 비교한 실험" />
+  <meta name="theme-color" content="#1a73e8" />
+  <link rel="stylesheet" href="../../../assets/style.css" />
+  <style>
+    .table-wrap { overflow-x: auto; margin: 0.6rem 0 1rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+    th, td { border: 1px solid var(--border); padding: 0.5rem 0.7rem; text-align: left; vertical-align: top; }
+    th { background: var(--accent-soft); color: var(--accent); font-weight: 700; white-space: nowrap; }
+    td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    tr.hl td { background: rgba(27,175,122,0.08); font-weight: 600; }
+    .note { border-left: 4px solid var(--accent); background: var(--accent-soft); padding: 0.7rem 1rem; border-radius: 0 8px 8px 0; margin: 0.8rem 0; }
+    .warn { border-left: 4px solid #d93025; background: rgba(217,48,37,0.08); padding: 0.7rem 1rem; border-radius: 0 8px 8px 0; margin: 0.8rem 0; }
+    .plan { border-left: 4px solid #e8710a; background: rgba(232,113,10,0.08); padding: 0.7rem 1rem; border-radius: 0 8px 8px 0; margin: 0.8rem 0; }
+    .screenshot { margin: 0.8rem 0 1.2rem; }
+    .screenshot img { display: block; max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 8px; }
+    .screenshot figcaption { margin-top: 0.4rem; color: var(--muted); font-size: 0.88rem; }
+    .pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; align-items: start; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.8rem; margin: 0.8rem 0 1rem; }
+    .stat { border: 1px solid var(--border); border-radius: 10px; padding: 0.7rem 0.9rem; }
+    .stat b { display: block; font-size: 1.5rem; color: var(--accent); font-variant-numeric: tabular-nums; }
+    .stat span { color: var(--muted); font-size: 0.88rem; }
+    section h3 { font-size: 1.05rem; margin-top: 1.5rem; }
+    code.req { word-break: break-all; }
+    .badge { display: inline-block; font-size: 0.82rem; font-weight: 700; padding: 0.12rem 0.55rem; border-radius: 999px; margin-right: 0.3rem; }
+    .b-personal { background: #e6f4ea; color: #188038; }
+    .b-done { background: var(--accent-soft); color: var(--accent); }
+  </style>
+</head>
+<body>
+  <main>
+    <a href="../" class="back-link">← 룰 vs AI 비교 프로젝트로</a>
+
+    <header>
+      <p class="tagline">개인 프로젝트 · 룰 기반 vs AI 탐지 비교 1단계</p>
+      <h1>WAF — OWASP Coraza + CRS vs AI</h1>
+      <p><span class="badge b-personal">개인 프로젝트</span><span class="badge b-done">Colab 실행 완료</span></p>
+      <p class="lead">쇼핑몰 HTTP 요청 데이터셋 하나를 <strong>룰 기반 WAF(OWASP Coraza + Core Rule Set 4.25)</strong>와 <strong>AI 모델 2개</strong>에 똑같이 넣고, 둘 다 처음 보는 시험 집합에서 <strong>몇 %를 잡고(탐지율), 정상 요청을 몇 % 막는지(오탐률)</strong> 비교했습니다.</p>
+      <div class="stats">
+        <div class="stat"><b>27.3%</b><span>CRS PL1 탐지율 (오탐 0.03%)</span></div>
+        <div class="stat"><b>91.8%</b><span>CNN 탐지율 (같은 오탐 0.03%)</span></div>
+        <div class="stat"><b>92.0%</b><span>룰 + CNN (오탐 0.05%)</span></div>
+        <div class="stat"><b>≈100%</b><span>SQLi·XSS·RCE 등 실제 공격 — 룰·AI 모두</span></div>
+      </div>
+      <p class="note">숫자만 보면 AI가 압승이지만, 차이의 대부분은 CRS가 원래 보지 않는 <strong>"이 쇼핑몰에서만 비정상인 값"</strong>(예: 버튼 이름 <code>B1=</code> 대신 <code>B1A=</code>)에서 나왔습니다. 그래서 결론은 "AI가 룰을 대체한다"가 아니라 <strong>"룰은 범용 공격, AI는 사이트 전용 이상 탐지 — 함께 쓰는 관계"</strong>입니다. 자세한 근거는 <a href="#analysis">6장</a>에 있습니다.</p>
+    </header>
+
+    <section>
+      <h2>1. 실험 구성</h2>
+      <figure class="screenshot">
+        <img src="images/00-pipeline.png" alt="CSIC 2010 데이터 → 중복 제거(97,065→34,594) → 60/20/20 분할 → 룰 기반(Coraza+CRS, 학습 없음)과 AI 모델(A TF-IDF, B Char-CNN, 학습 집합만 사용, 기준값은 검증 집합) → 시험 집합에서 비교" loading="lazy" />
+      </figure>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>구분</th><th>사용한 것</th><th>선택 이유</th></tr></thead>
+          <tbody>
+            <tr><td>데이터</td><td>HTTP DATASET CSIC 2010 (스페인 전자상거래 사이트 요청, 정상 72,000 / 비정상 25,065)</td><td>WAF 연구에서 가장 많이 쓰이는 공개 데이터라 다른 결과와 비교 가능</td></tr>
+            <tr><td>룰 기반</td><td>OWASP Coraza v3.8.1 + <code>coraza-coreruleset</code> v4.25.0 (CRS 4.25 LTS)</td><td>ModSecurity와 같은 CRS 룰을 그대로 쓰고, Go 라이브러리라 Colab에서 바로 빌드 가능</td></tr>
+            <tr><td>AI 모델 A</td><td>문자 2–5글자 조각 TF-IDF + 로지스틱 회귀 (scikit-learn, CPU)</td><td>단순하고 "어떤 글자 조각을 보고 판단했는지" 확인할 수 있는 기준선</td></tr>
+            <tr><td>AI 모델 B</td><td>바이트 단위 문자 CNN (PyTorch, 커널 3·5·7, 최대 512바이트)</td><td>특성 설계 없이 원문 그대로 학습하는 딥러닝 방식</td></tr>
+            <tr><td>실행 환경</td><td>Google Colab 무료 T4 GPU, Python 3.13, torch 2.14, Go 1.25.14</td><td>개인 PC에 GPU가 없음. 노트북 하나로 처음부터 끝까지 재현</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>노트북: <a href="waf_lab_phase1.ipynb" download><code>waf_lab_phase1.ipynb</code></a> (Colab에서 "노트 업로드" → T4 GPU 선택 → 모두 실행)</p>
+    </section>
+
+    <section>
+      <h2>2. Colab 실행 과정</h2>
+      <div class="pair">
+        <figure class="screenshot">
+          <img src="images/10-colab-home.png" alt="Colab 첫 화면: 새 노트, 노트 업로드 버튼" loading="lazy" />
+          <figcaption>① colab.research.google.com → <strong>노트 업로드</strong></figcaption>
+        </figure>
+        <figure class="screenshot">
+          <img src="images/11-upload.png" alt="노트 열기 창의 업로드 탭: 둘러보기 버튼" loading="lazy" />
+          <figcaption>② 업로드 → 둘러보기로 <code>waf_lab_phase1.ipynb</code> 선택</figcaption>
+        </figure>
+        <figure class="screenshot">
+          <img src="images/12-runtime-menu.png" alt="런타임 메뉴: 모두 실행, 런타임 유형 변경" loading="lazy" />
+          <figcaption>③ 런타임 → <strong>런타임 유형 변경</strong></figcaption>
+        </figure>
+        <figure class="screenshot">
+          <img src="images/13-runtime-t4.png" alt="런타임 유형 변경 창: 하드웨어 가속기 T4 GPU 선택" loading="lazy" />
+          <figcaption>④ 하드웨어 가속기 <strong>T4 GPU</strong> 선택 → 저장</figcaption>
+        </figure>
+      </div>
+      <figure class="screenshot">
+        <img src="images/14-run-all.png" alt="오른쪽 위 연결 T4 표시, 런타임 → 모두 실행" loading="lazy" />
+        <figcaption>⑤ 오른쪽 위 "연결 T4" 확인 → 런타임 → <strong>모두 실행</strong>. (설명 문단의 취소선은 Colab이 <code>~</code> 두 개 사이를 취소선으로 바꾼 것이라, 배포 노트북에서는 <code>–</code>로 고침)</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/20-versions.png" alt="버전 출력: python 3.13.16, numpy 2.4.6, pandas 2.2.3, scikit-learn 1.6.1, torch 2.14.1+cu130, gpu Tesla T4" loading="lazy" />
+        <figcaption>환경 확인. 라이브러리 버전과 GPU(Tesla T4)를 결과 파일에도 기록</figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>3. 데이터 준비 — 64%가 중복</h2>
+      <figure class="screenshot">
+        <img src="images/21-data.png" alt="git clone으로 데이터셋 3개 파일을 받고 크기와 sha256 앞자리 출력" loading="lazy" />
+        <figcaption>원본 배포처가 자주 끊겨서 공개 미러 2곳을 차례로 시도하고, 받은 파일의 sha256을 출력해 같은 데이터인지 확인</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/22-dedupe.png" alt="원본 97,065건 중 고유 요청 34,594건, 정상 18,640, 비정상 15,954, 라벨 충돌 0, 중복 제거로 62,471건(64%) 제외" loading="lazy" />
+        <figcaption>메서드 + URL + 본문이 같은 요청을 하나로 합쳤더니 <strong>97,065건 → 34,594건</strong></figcaption>
+      </figure>
+      <p>CSIC 2010은 같은 요청이 여러 번 들어 있습니다. 중복을 그대로 두고 나누면 <strong>시험 문제와 똑같은 요청이 학습 데이터에 들어가</strong> AI 점수가 부풀려지기 때문에, 먼저 중복을 지우고(정상·비정상 양쪽에 같은 요청이 있는 라벨 충돌은 0건) 정상·비정상 비율을 유지한 채 <strong>학습 60 / 검증 20 / 시험 20</strong>으로 나눴습니다.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>집합</th><th>정상</th><th>비정상</th><th>쓰임</th></tr></thead>
+          <tbody>
+            <tr><td>학습</td><td class="num">11,184</td><td class="num">9,572</td><td>AI 모델 학습</td></tr>
+            <tr><td>검증</td><td class="num">3,728</td><td class="num">3,191</td><td>AI 판정 기준값 선택 ("오탐률 1%" 같은 운영 기준을 여기서 맞춤)</td></tr>
+            <tr><td>시험</td><td class="num">3,728</td><td class="num">3,191</td><td><strong>모든 비교는 여기서만</strong>. 룰도 AI도 처음 보는 요청</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>4. 룰 기반 — Coraza + CRS를 Go로 직접 돌리기</h2>
+      <p>Coraza는 웹 서버 모듈이 아니라 Go 라이브러리라서, CSV로 받은 요청을 하나씩 Coraza 트랜잭션에 넣고 <strong>차단 여부 · 이상 점수 · 걸린 룰 ID</strong>를 CSV로 쓰는 작은 채점 도구(<code>crsscan</code>, Go 약 190줄)를 노트북 안에서 만들어 빌드했습니다. 실제 WAF처럼 요청 헤더·본문 단계를 모두 거치고, CRS 기본값(이상 점수 5점 이상 차단)을 그대로 씁니다.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>설정</th><th>값</th></tr></thead>
+          <tbody>
+            <tr><td>룰 불러오기</td><td><code>Include @coraza.conf-recommended</code> → <code>@crs-setup.conf.example</code> → <code>@owasp_crs/*.conf</code> (룰 파일을 Go 바이너리에 내장)</td></tr>
+            <tr><td>편집증 수준(PL)</td><td>1–4를 각각 따로 실행. 높을수록 더 많은 룰이 켜져 많이 잡지만 오탐도 늘어남</td></tr>
+            <tr><td>병렬 처리</td><td>Colab CPU 2개에 맞춰 작업자 2개</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <figure class="screenshot">
+        <img src="images/24-go.png" alt="Go 1.25.14 내려받아 설치 후 go version 확인" loading="lazy" />
+        <figcaption>Coraza v3.8.1은 Go 1.25 이상이 필요해 Colab에 Go 1.25.14를 설치</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/25-crsscan-build.png" alt="go mod init, go build로 19MB crsscan 빌드, 시험 요청 2건 중 공격 1건이 403 차단, 점수 5, 룰 942100" loading="lazy" />
+        <figcaption>빌드 후 시험 요청 2건으로 동작 확인. SQL 인젝션 요청은 <strong>403, 점수 5, 룰 942100</strong>(SQL 인젝션 탐지)으로 차단, 정상 요청은 통과</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/26-crs-scan.png" alt="검증+시험 13,838건을 PL1 42.8초(323.6 요청/초), PL2 75.7초, PL3 85.6초, PL4 85.9초에 채점" loading="lazy" />
+        <figcaption>검증 + 시험 13,838건 채점. PL1은 초당 324건, PL3·4는 켜지는 룰이 많아 초당 161건</figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>5. AI 모델 학습</h2>
+      <figure class="screenshot">
+        <img src="images/27-model-a.png" alt="모델 A 학습 28.5초, 판정 1,254 요청/초, 특성 300,000개, 비정상 판정에 영향이 큰 조각: %2, a=, da=, %2f, %27, b1a= 등" loading="lazy" />
+        <figcaption>모델 A: 학습 28.5초(CPU). 비정상 판정에 영향이 큰 글자 조각 목록에 <code>b1a=</code>, <code>1a=</code>가 보임 — 이 사이트 버튼 이름을 바꾼 요청을 외웠다는 뜻 (6장)</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/28-model-b.png" alt="Char-CNN 6 epoch: loss 0.4311→0.0546, val AUC 0.9865→0.9978, 학습 28.1초(cuda), 판정 20,822 요청/초" loading="lazy" />
+        <figcaption>모델 B: T4 GPU에서 6 epoch 28초. 검증 AUC 0.9865 → 0.9978</figcaption>
+      </figure>
+      <p>AI는 0–1 사이 점수를 내므로 "몇 점부터 막을지" 기준값이 필요합니다. 기준값은 시험 집합이 아니라 <strong>검증 집합</strong>에서 "정상 요청의 1% / 0.1% / CRS PL1과 같은 비율까지만 막는다"는 운영 기준에 맞춰 정했습니다. 시험 집합에서 기준값을 고르면 AI에게 답안지를 보여 주는 셈이기 때문입니다.</p>
+    </section>
+
+    <section>
+      <h2>6. 결과</h2>
+      <figure class="screenshot">
+        <img src="images/01-result-chart.png" alt="탐지율과 오탐률 막대그래프. CRS PL1 27.3%/0.03%, PL2 40.9%/15.21%, PL3 79.8%/70.92%, PL4 93.1%/90.02%, A@1% 97.8%/0.72%, B@0.1% 91.8%/0.03%, B@PL1과 같은 오탐 77.5%/0.00%, 하이브리드 92.0%/0.05%" loading="lazy" />
+        <figcaption>시험 집합 결과. 왼쪽은 탐지율, 오른쪽은 정상 요청을 막은 비율</figcaption>
+      </figure>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>방식</th><th>탐지율</th><th>오탐률</th><th>놓친 공격</th><th>막힌 정상</th><th>처리 속도</th></tr></thead>
+          <tbody>
+            <tr><td>CRS PL1 (기본값)</td><td class="num">27.3%</td><td class="num">0.03%</td><td class="num">2,320</td><td class="num">1</td><td class="num">324건/초</td></tr>
+            <tr><td>CRS PL2</td><td class="num">40.9%</td><td class="num">15.2%</td><td class="num">1,887</td><td class="num">567</td><td class="num">183건/초</td></tr>
+            <tr><td>CRS PL3</td><td class="num">79.8%</td><td class="num">70.9%</td><td class="num">645</td><td class="num">2,644</td><td class="num">162건/초</td></tr>
+            <tr><td>CRS PL4</td><td class="num">93.1%</td><td class="num">90.0%</td><td class="num">221</td><td class="num">3,356</td><td class="num">161건/초</td></tr>
+            <tr><td>A TF-IDF @ 오탐 1%</td><td class="num">97.8%</td><td class="num">0.72%</td><td class="num">71</td><td class="num">27</td><td class="num">1,254건/초</td></tr>
+            <tr><td>A TF-IDF @ 오탐 0.1%</td><td class="num">87.6%</td><td class="num">0.11%</td><td class="num">397</td><td class="num">4</td><td class="num">1,254건/초</td></tr>
+            <tr><td>B CNN @ 오탐 1%</td><td class="num">97.4%</td><td class="num">0.80%</td><td class="num">83</td><td class="num">30</td><td class="num">20,822건/초</td></tr>
+            <tr><td>B CNN @ 오탐 0.1%</td><td class="num">91.8%</td><td class="num">0.03%</td><td class="num">260</td><td class="num">1</td><td class="num">20,822건/초</td></tr>
+            <tr><td>B CNN @ CRS PL1과 같은 오탐</td><td class="num">77.5%</td><td class="num">0.00%</td><td class="num">719</td><td class="num">0</td><td class="num">20,822건/초</td></tr>
+            <tr class="hl"><td>하이브리드: CRS PL1 <strong>또는</strong> B @ 0.1%</td><td class="num">92.0%</td><td class="num">0.05%</td><td class="num">255</td><td class="num">2</td><td class="num">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>시험 집합: 정상 3,728건, 비정상 3,191건. 처리 속도는 <strong>환경이 서로 달라 직접 비교하면 안 됩니다</strong> — CRS는 CPU 2개로 요청 하나하나를 WAF 단계 전체에 통과시킨 값, CNN은 GPU에서 묶음 처리한 값입니다.</p>
+      <figure class="screenshot">
+        <img src="images/31-roc.png" alt="ROC 곡선: A와 B는 AUC 0.998로 왼쪽 위에 붙어 있고, CRS PL1~4 점은 오른쪽 아래로 갈수록 탐지율과 오탐률이 함께 증가, 하이브리드 별표는 오탐 0.05%에서 탐지 92%" loading="lazy" />
+        <figcaption>ROC 곡선(가로축 1% 위는 로그 눈금). AI 두 모델은 왼쪽 위에 붙어 있고, CRS는 PL을 올릴수록 오탐이 함께 커지는 오른쪽 아래 방향으로 움직임</figcaption>
+      </figure>
+
+      <h3 id="analysis">왜 이렇게 차이가 나는가 — 공격 계열별로 나눠 보기</h3>
+      <p>비정상 요청을 <strong>CRS PL1이 걸어 둔 룰 ID</strong>로 공격 계열을 나눠 보니 차이가 어디서 나왔는지 분명해졌습니다.</p>
+      <figure class="screenshot" style="max-width:720px">
+        <img src="images/32-family.png" alt="공격 계열별 탐지율: no CRS match 2,319건은 CRS 0.0, A 0.970, B 0.964. XSS 247, protocol 237, RCE+SQLi 148, SQLi 128 등은 CRS·A·B 모두 0.99~1.0" loading="lazy" />
+        <figcaption>시험 집합 비정상 요청 3,191건 중 <strong>2,319건(72.7%)은 CRS 룰이 하나도 걸리지 않음</strong></figcaption>
+      </figure>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>계열</th><th>건수</th><th>CRS PL1</th><th>A</th><th>B</th></tr></thead>
+          <tbody>
+            <tr><td>CRS 룰이 하나도 안 걸린 요청</td><td class="num">2,319</td><td class="num">0%</td><td class="num">97.0%</td><td class="num">96.4%</td></tr>
+            <tr><td>XSS</td><td class="num">247</td><td class="num">100%</td><td class="num">100%</td><td class="num">100%</td></tr>
+            <tr><td>프로토콜 위반</td><td class="num">237</td><td class="num">99.6%</td><td class="num">100%</td><td class="num">100%</td></tr>
+            <tr><td>SQLi · RCE · 경로 탐색 조합</td><td class="num">337</td><td class="num">100%</td><td class="num">99.7%</td><td class="num">100%</td></tr>
+            <tr><td>허용되지 않은 메서드</td><td class="num">51</td><td class="num">100%</td><td class="num">100%</td><td class="num">100%</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><strong>실제 공격(SQLi · XSS · 명령 실행 · 경로 탐색)은 룰과 AI 모두 거의 100% 잡았습니다.</strong> 탐지율 차이는 전부 첫 줄에서 나왔습니다. CSIC 2010의 "비정상"에는 공격뿐 아니라 이 쇼핑몰에서 허용되지 않는 값(버튼 이름 <code>B1=</code> 대신 <code>B1A=</code>, 상품 번호 <code>id=2%2F</code>, 오류 메시지 <code>errorMsg=%2B</code>)을 넣은 <strong>파라미터 변조</strong>가 많은데, CRS는 어느 사이트에나 쓰는 <strong>범용 공격 패턴</strong>만 보므로 이런 요청에 반응하지 않는 것이 정상 동작입니다. AI는 이 사이트의 정상 요청 모양을 배웠기 때문에 "평소와 다르다"를 잡아냈습니다 — 모델 A가 중요하게 본 조각에 <code>b1a=</code>가 있는 것이 그 증거입니다.</p>
+
+      <h3>사례로 확인 (B @ 오탐 1% 기준)</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>경우</th><th>건수</th><th>대표 사례와 해석</th></tr></thead>
+          <tbody>
+            <tr><td>AI만 잡음</td><td class="num">2,237</td><td>대부분 <code class="req">vaciar.jsp?B2A=Vaciar+carrito</code> 같은 변조. 다만 그중에는 <code class="req">nombre=any%250D%250ASet-cookie%253A+Tamper%253D…</code> 처럼 <strong>이중 URL 인코딩한 헤더 주입(CRLF)</strong>도 있었음. 따로 돌려 보니 CRS는 PL1에서 0점, PL2에서도 "다중 인코딩" 룰 920230 하나(3점)만 걸려 통과했고 PL3부터 차단됨 — <strong>기본 설정 룰이 놓친 실제 공격을 AI가 잡은 사례</strong></td></tr>
+            <tr><td>CRS만 잡음</td><td class="num">0</td><td>CRS PL1이 잡은 871건은 AI도 모두 잡음</td></tr>
+            <tr><td>둘 다 놓침</td><td class="num">83</td><td>회원가입·정보 수정처럼 <strong>필드가 많은 긴 요청</strong>에 글자 하나만 끼운 변조 (<code>Lu*is</code>, <code>cari%3Ftta</code>). 정상 요청과 거의 같아서 AI 점수도 0.1–0.6에 머묾</td></tr>
+            <tr><td>CRS 오탐</td><td class="num">1</td><td>비밀번호가 <code>$infaliblemente</code>(<code>%24</code>)로 시작해 MongoDB 연산자(<code>$…</code>) 주입 룰 <strong>942290</strong>에 걸림. 룰 ID가 남아 원인을 바로 알 수 있음</td></tr>
+            <tr><td>AI 오탐</td><td class="num">30</td><td>정상인 <code>vaciar.jsp?B2=Vaciar+carrito</code>(0.71점), 비밀번호에 <code>%3F</code> · <code>%2B</code> 같은 특수문자가 든 로그인. 변조 요청과 글자 모양이 비슷한데, <strong>왜 막았는지 설명이 남지 않음</strong></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>7. 결론과 해석할 때 주의할 점</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th></th><th>룰 기반 (CRS)</th><th>AI (이번 실험)</th></tr></thead>
+          <tbody>
+            <tr><td>잘 잡는 것</td><td>어느 사이트에나 나타나는 범용 공격</td><td>이 사이트의 "평소와 다른" 요청 (변조 포함)</td></tr>
+            <tr><td>필요한 것</td><td>학습 불필요, 설치 즉시 동작</td><td>그 사이트의 정상·비정상 데이터, 사이트가 바뀌면 다시 학습</td></tr>
+            <tr><td>막은 이유</td><td>룰 ID로 바로 설명 (예: 942290)</td><td>점수만 남음 — 오탐 원인 찾기가 어려움</td></tr>
+            <tr><td>범위 넓히기</td><td>PL을 올리면 오탐이 급증 (PL3 70.9%) → 예외 규칙 튜닝 필요</td><td>기준값 하나로 탐지율·오탐률을 연속 조절</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note"><strong>룰 = 범용 공격 차단, AI = 사이트 전용 이상 탐지.</strong> 경쟁이 아니라 보완 관계입니다. 실제로 CRS PL1에 CNN을 "또는"으로 붙인 하이브리드는 오탐을 0.05%로 유지하면서 탐지율을 27.3% → 92.0%로 올렸고, 막힌 요청 중 룰에 걸린 것은 룰 ID로 설명할 수 있습니다.</p>
+      <div class="warn">
+        <p style="margin-top:0"><strong>이 숫자를 그대로 일반화하면 안 되는 이유</strong></p>
+        <ul style="margin-bottom:0">
+          <li>AI의 높은 점수는 <strong>이 쇼핑몰 전용</strong> 성능입니다. 다른 사이트에 그대로 쓰면 이 점수가 나오지 않습니다.</li>
+          <li>CSIC 2010은 2010년 데이터라 최신 공격 기법과 정상 트래픽 모양이 다릅니다.</li>
+          <li>CRS PL3·PL4의 높은 오탐률은 <strong>튜닝(예외 규칙) 없이</strong> 켰을 때의 값입니다. 실제 운영에서는 오탐을 확인하며 예외를 추가해 낮춥니다.</li>
+          <li>공격자가 AI를 속이려고 요청을 바꾸는 경우(적대적 회피)는 시험하지 않았습니다.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <h2>8. 다음 단계</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>순서</th><th>할 일</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>CRS PL2 오탐 567건을 룰 ID별로 묶어 예외 규칙을 만든 뒤 다시 비교 — "튜닝한 룰" vs AI</td></tr>
+            <tr><td>2</td><td>CSIC에서 학습한 모델을 다른 데이터셋(공격 위주 페이로드)에 그대로 적용해 일반화 정도 확인</td></tr>
+            <tr><td>3</td><td>2단계 IPS: Suricata + ET Open 룰 vs 흐름 특성 모델 (CIC-IDS2017)</td></tr>
+            <tr><td>4</td><td>3단계 DDoS: 고정 임계값 룰 vs 시계열·흐름 모델 (CIC-DDoS2019)</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>황태운 · 시스템 인프라 운영 관리자</p>
+  </footer>
+</body>
+</html>
