@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>CPU vs GPU 성능 비교 — 보안 탐지 모델 — 황태운</title>
+  <meta name="description" content="WAF·IPS·DDoS 탐지 모델(XGBoost, MLP)을 Colab T4 GPU와 CPU에서 학습·추론해 학습 시간, 배치별 처리량, 단건 지연을 비교하고 목표 트래픽 기준 용량을 산정한 결과." />
+  <meta name="theme-color" content="#1a73e8" />
+  <link rel="stylesheet" href="../../../assets/style.css" />
+  <style>
+    .table-wrap { overflow-x: auto; margin: 0.6rem 0 1rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+    th, td { border: 1px solid var(--border); padding: 0.5rem 0.7rem; text-align: left; vertical-align: top; }
+    th { background: var(--accent-soft); color: var(--accent); font-weight: 700; white-space: nowrap; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    td.s-good { background: rgba(24,128,56,0.12); }
+    td.s-mid  { background: rgba(232,113,10,0.12); }
+    td.s-bad  { background: rgba(217,48,37,0.12); }
+    .note { border-left: 4px solid var(--accent); background: var(--accent-soft); padding: 0.7rem 1rem; border-radius: 0 8px 8px 0; margin: 0.8rem 0; }
+    .badge { display: inline-block; font-size: 0.82rem; font-weight: 700; padding: 0.12rem 0.55rem; border-radius: 999px; margin-right: 0.3rem; }
+    .b-personal { background: #e6f4ea; color: #188038; }
+    .b-done { background: var(--accent-soft); color: var(--accent); }
+    .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 0.7rem; margin: 1rem 0; }
+    .kpi { border: 1px solid var(--border); border-radius: 12px; padding: 0.8rem 1rem; background: var(--card); }
+    .kpi span { display: block; color: var(--muted); font-size: 0.85rem; }
+    .kpi strong { display: block; color: var(--accent); font-size: 1.35rem; line-height: 1.3; margin: 0.15rem 0; }
+    figure { margin: 0.8rem 0 1.2rem; }
+    figure img { max-width: 100%; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
+    figcaption { color: var(--muted); font-size: 0.88rem; margin-top: 0.3rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <a href="../index.html" class="back-link">← 룰 vs AI 비교 개요로</a>
+
+    <header>
+      <p class="tagline">개인 프로젝트 · 룰 기반 vs AI 탐지 비교 · 5단계</p>
+      <h1>CPU vs GPU 성능 비교 — 보안 탐지 모델</h1>
+      <p><span class="badge b-personal">개인 프로젝트</span><span class="badge b-done">완료</span></p>
+      <p class="lead">앞 단계 탐지 모델 구조(<strong>XGBoost, MLP</strong>)를 같은 데이터·같은 하이퍼파라미터로 <strong>CPU와 GPU(Colab T4)</strong>에서 학습·추론했습니다. 목적은 "GPU가 빠르다"를 확인하는 게 아니라, <strong>어떤 운영 조건에서 GPU가 필요한지</strong>를 숫자로 판단하는 것입니다.</p>
+    </header>
+
+    <div class="kpis">
+      <div class="kpi"><span>학습 시간 (IPS · XGBoost)</span><strong>267s → 22s</strong><span>12.0배 단축</span></div>
+      <div class="kpi"><span>단건(batch=1) 추론</span><strong>CPU 우세</strong><span>GPU 처리량은 CPU의 0.11~0.64배</span></div>
+      <div class="kpi"><span>대량 배치(16,384) 처리량</span><strong>최대 83배</strong><span>DDoS · XGBoost, GPU</span></div>
+      <div class="kpi"><span>목표 트래픽 기준</span><strong>CPU 서버 1대</strong><span>추론만 보면 GPU 불필요</span></div>
+    </div>
+
+    <section>
+      <h2>실험 환경과 방법</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>항목</th><th>값</th></tr></thead>
+        <tbody>
+          <tr><td>GPU</td><td>Tesla T4 (14.6 GB) · Driver 580.82.07 · CUDA 13.0 · cuDNN 92800</td></tr>
+          <tr><td>CPU</td><td>Intel(R) Xeon(R) CPU @ 2.00GHz · vCPU 2개 · RAM 12.7 GB</td></tr>
+          <tr><td>라이브러리</td><td>PyTorch 2.14.1+cu130 · XGBoost 3.4.1 · scikit-learn 1.6.1 · Python 3.13.16</td></tr>
+          <tr><td>데이터</td><td>단계별 규모를 맞춘 합성 데이터 — WAF 20만×64, IPS 30만×80(5클래스), DDoS 50만×40</td></tr>
+          <tr><td>모델</td><td>XGBoost(트리 300, 깊이 8, <code>hist</code>) <code>device=cpu / cuda</code> · MLP(256→128) CPU FP32 / CUDA FP32 / CUDA FP16(AMP)</td></tr>
+          <tr><td>지표</td><td>학습 시간, macro F1, 배치(1 / 64 / 1,024 / 16,384)별 처리량, 단건 지연 p50·p99</td></tr>
+        </tbody>
+      </table></div>
+      <p class="note">GPU 연산은 비동기라서 측정 전후에 <code>torch.cuda.synchronize()</code>를 넣었고, 워밍업 후 반복 측정한 중앙값을 썼습니다. GPU 추론 입력은 미리 GPU 메모리에 올려(cupy·텐서) CPU↔GPU 복사 비용을 뺐습니다.</p>
+    </section>
+
+    <section>
+      <h2>학습 시간 — GPU가 일관되게 빠름</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>단계</th><th>모델</th><th>CPU (s)</th><th>GPU (s)</th><th>배율</th><th>F1 (CPU / GPU)</th></tr></thead>
+        <tbody>
+<tr><td>WAF</td><td>XGBoost</td><td class="num">27.6</td><td class="num">4.8</td><td class="num"><strong>5.7×</strong></td><td class="num">0.959 / 0.959</td></tr>
+<tr><td>WAF</td><td>MLP</td><td class="num">8.0</td><td class="num">1.8</td><td class="num"><strong>4.5×</strong></td><td class="num">0.979 / 0.979</td></tr>
+<tr><td>IPS</td><td>XGBoost</td><td class="num">267.0</td><td class="num">22.3</td><td class="num"><strong>12.0×</strong></td><td class="num">0.947 / 0.947</td></tr>
+<tr><td>IPS</td><td>MLP</td><td class="num">11.6</td><td class="num">2.0</td><td class="num"><strong>5.9×</strong></td><td class="num">0.983 / 0.983</td></tr>
+<tr><td>DDoS</td><td>XGBoost</td><td class="num">32.6</td><td class="num">6.5</td><td class="num"><strong>5.0×</strong></td><td class="num">0.963 / 0.963</td></tr>
+<tr><td>DDoS</td><td>MLP</td><td class="num">18.6</td><td class="num">3.2</td><td class="num"><strong>5.8×</strong></td><td class="num">0.982 / 0.982</td></tr>
+        </tbody>
+      </table></div>
+      <figure><img src="img/gpu-train_time.png" alt="단계·모델별 CPU/GPU 학습 시간 막대 그래프"><figcaption>학습 시간 (초, 낮을수록 좋음)</figcaption></figure>
+      <p class="note">IPS(5클래스) XGBoost에서 차이가 가장 큽니다. 다중 분류는 클래스 수만큼 트리를 만들어 연산량이 늘기 때문입니다. XGBoost F1은 CPU와 GPU가 같아서 <strong>장치를 바꿔도 탐지 품질은 그대로</strong>입니다.</p>
+    </section>
+
+    <section>
+      <h2>추론 — 배치 크기에 따라 결과가 뒤집힘</h2>
+      <p>CPU 대비 GPU 처리량 배율입니다. 1 미만이면 GPU가 더 느립니다.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>단계</th><th>모델</th><th>GPU</th><th>batch 1</th><th>batch 64</th><th>batch 1,024</th><th>batch 16,384</th></tr></thead>
+        <tbody>
+<tr><td>WAF</td><td>XGBoost</td><td>cuda</td><td class="num s-bad">0.38×</td><td class="num s-bad">0.78×</td><td class="num s-good">5.11×</td><td class="num s-good">36.70×</td></tr>
+<tr><td>WAF</td><td>MLP</td><td>cuda</td><td class="num s-bad">0.64×</td><td class="num s-mid">1.57×</td><td class="num s-good">10.40×</td><td class="num s-good">19.35×</td></tr>
+<tr><td>WAF</td><td>MLP</td><td>cuda+fp16</td><td class="num s-bad">0.34×</td><td class="num s-mid">1.16×</td><td class="num s-good">6.77×</td><td class="num s-good">51.05×</td></tr>
+<tr><td>IPS</td><td>XGBoost</td><td>cuda</td><td class="num s-bad">0.11×</td><td class="num s-bad">0.55×</td><td class="num s-good">5.23×</td><td class="num s-good">21.58×</td></tr>
+<tr><td>IPS</td><td>MLP</td><td>cuda</td><td class="num s-bad">0.57×</td><td class="num s-mid">1.52×</td><td class="num s-good">8.35×</td><td class="num s-good">19.45×</td></tr>
+<tr><td>IPS</td><td>MLP</td><td>cuda+fp16</td><td class="num s-bad">0.37×</td><td class="num s-mid">1.02×</td><td class="num s-good">5.76×</td><td class="num s-good">43.37×</td></tr>
+<tr><td>DDoS</td><td>XGBoost</td><td>cuda</td><td class="num s-bad">0.32×</td><td class="num s-mid">1.18×</td><td class="num s-good">10.39×</td><td class="num s-good">83.01×</td></tr>
+<tr><td>DDoS</td><td>MLP</td><td>cuda</td><td class="num s-bad">0.57×</td><td class="num s-mid">2.09×</td><td class="num s-good">8.89×</td><td class="num s-good">17.37×</td></tr>
+<tr><td>DDoS</td><td>MLP</td><td>cuda+fp16</td><td class="num s-bad">0.35×</td><td class="num s-mid">1.16×</td><td class="num s-good">6.13×</td><td class="num s-good">43.52×</td></tr>
+        </tbody>
+      </table></div>
+      <figure><img src="img/gpu-throughput_by_batch.png" alt="배치 크기별 추론 처리량 로그 스케일 그래프"><figcaption>배치 크기별 추론 처리량 (rows/s, 로그 스케일)</figcaption></figure>
+
+      <h3>단건 지연 시간 (p50 / p99, ms)</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>단계</th><th>모델</th><th>CPU</th><th>GPU</th></tr></thead>
+        <tbody>
+<tr><td>WAF</td><td>XGBoost</td><td class="num">0.371 / 0.563</td><td class="num">1.503 / 2.087</td></tr>
+<tr><td>WAF</td><td>MLP</td><td class="num">0.088 / 0.180</td><td class="num">0.151 / 0.238</td></tr>
+<tr><td>IPS</td><td>XGBoost</td><td class="num">0.727 / 1.450</td><td class="num">5.645 / 6.521</td></tr>
+<tr><td>IPS</td><td>MLP</td><td class="num">0.081 / 0.154</td><td class="num">0.152 / 0.246</td></tr>
+<tr><td>DDoS</td><td>XGBoost</td><td class="num">0.362 / 0.536</td><td class="num">1.470 / 1.763</td></tr>
+<tr><td>DDoS</td><td>MLP</td><td class="num">0.088 / 0.153</td><td class="num">0.153 / 0.246</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="table-wrap"><table>
+        <thead><tr><th>구간</th><th>관찰</th><th>이유</th></tr></thead>
+        <tbody>
+          <tr><td>작은 배치 (1~64)</td><td>CPU 우세 또는 비슷</td><td>요청 1건은 전송·커널 실행 오버헤드가 연산 시간보다 큼</td></tr>
+          <tr><td>큰 배치 (1,024~)</td><td>GPU 5~83배</td><td>CPU(MLP)는 약 0.8M건/s에서 포화, GPU는 배치가 커질수록 계속 증가</td></tr>
+          <tr><td>FP16 (AMP)</td><td>batch 16,384에서만 이득</td><td>최대 35M건/s로 FP32의 2배 이상(Tensor 코어). 작은 모델·배치에서는 형 변환 비용으로 오히려 느림</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section>
+      <h2>용량 산정</h2>
+      <p>목표 트래픽 WAF 5천 · IPS 5만 · DDoS 20만 건/s, 마이크로배치 1,024, 최대 사용률 70% 기준입니다.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>단계</th><th>모델</th><th>장치</th><th>목표 (건/s)</th><th>1대 처리량 (건/s)</th><th>근거</th><th>필요 대수</th><th>예상 사용률</th></tr></thead>
+        <tbody>
+<tr><td>DDoS</td><td>MLP</td><td>cpu</td><td class="num">200,000</td><td class="num">7,584,297</td><td>환산(효율 70%)</td><td class="num">1</td><td class="num">2.64%</td></tr>
+<tr><td>DDoS</td><td>MLP</td><td>cuda</td><td class="num">200,000</td><td class="num">6,021,652</td><td>실측</td><td class="num">1</td><td class="num">3.32%</td></tr>
+<tr><td>DDoS</td><td>XGBoost</td><td>cpu</td><td class="num">200,000</td><td class="num">704,538</td><td>환산(효율 70%)</td><td class="num">1</td><td class="num">28.39%</td></tr>
+<tr><td>DDoS</td><td>XGBoost</td><td>cuda</td><td class="num">200,000</td><td class="num">653,800</td><td>실측</td><td class="num">1</td><td class="num">30.59%</td></tr>
+<tr><td>IPS</td><td>MLP</td><td>cpu</td><td class="num">50,000</td><td class="num">7,531,083</td><td>환산(효율 70%)</td><td class="num">1</td><td class="num">0.66%</td></tr>
+<tr><td>IPS</td><td>MLP</td><td>cuda</td><td class="num">50,000</td><td class="num">5,614,928</td><td>실측</td><td class="num">1</td><td class="num">0.89%</td></tr>
+<tr><td>IPS</td><td>XGBoost</td><td>cpu</td><td class="num">50,000</td><td class="num">259,561</td><td>환산(효율 70%)</td><td class="num">1</td><td class="num">19.26%</td></tr>
+<tr><td>IPS</td><td>XGBoost</td><td>cuda</td><td class="num">50,000</td><td class="num">121,269</td><td>실측</td><td class="num">1</td><td class="num">41.23%</td></tr>
+<tr><td>WAF</td><td>MLP</td><td>cpu</td><td class="num">5,000</td><td class="num">6,521,125</td><td>환산(효율 70%)</td><td class="num">1</td><td class="num">0.08%</td></tr>
+<tr><td>WAF</td><td>MLP</td><td>cuda</td><td class="num">5,000</td><td class="num">6,055,947</td><td>실측</td><td class="num">1</td><td class="num">0.08%</td></tr>
+<tr><td>WAF</td><td>XGBoost</td><td>cpu</td><td class="num">5,000</td><td class="num">1,272,868</td><td>환산(효율 70%)</td><td class="num">1</td><td class="num">0.39%</td></tr>
+<tr><td>WAF</td><td>XGBoost</td><td>cuda</td><td class="num">5,000</td><td class="num">580,397</td><td>실측</td><td class="num">1</td><td class="num">0.86%</td></tr>
+        </tbody>
+      </table></div>
+      <p class="note">CPU 처리량은 Colab vCPU 2개 측정값을 32코어 서버로 환산한 <strong>추정치</strong>입니다(코어당 처리량 × 32 × 확장 효율 70%). GPU는 T4 1장 <strong>실측치</strong>입니다. 측정 범위는 모델 연산만이며 로그 파싱·특징 추출 시간은 포함하지 않습니다. batch 1,024에서는 XGBoost의 경우 32코어 CPU 서버(환산)가 T4 1장보다 처리량이 높습니다.</p>
+    </section>
+
+    <section>
+      <h2>운영 결론</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>구간</th><th>판단 기준</th><th>권장</th><th>근거</th></tr></thead>
+        <tbody>
+          <tr><td>WAF 인라인 차단</td><td>단건 지연 (p99)</td><td><strong>CPU</strong></td><td>요청마다 즉시 판정. MLP p50 CPU 0.09ms vs GPU 0.15ms</td></tr>
+          <tr><td>IPS · DDoS 플로우 분석</td><td>대량 배치 처리량</td><td><strong>규모에 따라</strong></td><td>목표 트래픽에서는 CPU 서버 1대로 충분(최대 사용률 약 28%). 수백만 건/s 규모부터 GPU가 의미 있음</td></tr>
+          <tr><td>모델 재학습</td><td>학습 시간</td><td><strong>GPU</strong></td><td>4.0~12배 단축. 새 공격 패턴 반영 주기를 줄이는 데 GPU 투자 가치가 있음</td></tr>
+        </tbody>
+      </table></div>
+      <p class="note">이 규모에서는 <strong>추론은 CPU 서버(4단계 단일 장비 구성)에 두고, GPU는 재학습 전용으로 분리</strong>하는 구성이 비용 대비 가장 합리적입니다.</p>
+    </section>
+
+    <section>
+      <h2>한계와 다음 단계</h2>
+      <ul>
+        <li>합성 데이터로 측정했으므로 F1은 탐지 성능이 아니라 CPU/GPU 결과 일치 확인용입니다. 1~3단계 실제 특징 데이터로 재측정할 예정입니다.</li>
+        <li>CPU 서버 수치는 환산값입니다. Rocky 9 실서버에서 측정해 실측값으로 바꿀 수 있습니다.</li>
+        <li>엔드투엔드(수집 → 특징 추출 → 추론) 지연은 4단계 VM 실습에서 측정할 예정입니다.</li>
+      </ul>
+      <p>코드·결과: <a href="https://github.com/hwang-taeun/security-ai-lab/tree/main/04-gpu-benchmark">GitHub · security-ai-lab / 04-gpu-benchmark</a></p>
+    </section>
+  </main>
+
+  <footer>
+    <p>황태운 · 시스템 인프라 운영 관리자</p>
+  </footer>
+</body>
+</html>
