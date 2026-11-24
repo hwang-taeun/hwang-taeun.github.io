@@ -2,9 +2,25 @@
 # 프로젝트 목록 자동 생성
 #  - 상세 페이지가 있는 프로젝트: projects/<폴더>/index.html 머리말에 type: project 로 등록
 #  - 상세 페이지가 없는 프로젝트: 아래 extra_projects 에 등록 (형식은 상세 페이지 머리말과 동일 + anchor)
-#  - 머리말에 category: ai 를 넣으면 아래 "AI 활용" 섹션으로 분류
-#  - 상단 목차는 같은 목록으로 자동 생성 (anchor 가 없으면 상세 페이지 주소로 id 생성)
+#  - 머리말에 category: ai 를 넣으면 "AI 활용" 분야로 분류
+#
+# 왼쪽 트리 목차 (기술 분야별 자동 분류)
+#  - 프로젝트 제목(title)에 아래 keywords 중 하나가 들어 있으면 그 분야로 분류
+#  - 위에 있는 분야부터 검사, 처음 맞는 분야로 들어감 (영문 키워드는 대소문자 구분)
+#  - 어디에도 안 맞으면 "기타"
+#  - 특정 프로젝트만 직접 지정하려면 그 프로젝트 머리말에 group: "분야 이름" (키워드보다 우선)
 extra_projects: []
+groups:
+  - name: "보안"
+    keywords: ["WAF", "ModSecurity", "GeoIP", "침해", "SSL", "보안"]
+  - name: "고가용성 (HA)"
+    keywords: ["HA", "Galera", "Pacemaker", "이중화", "클러스터"]
+  - name: "모니터링 · 로그"
+    keywords: ["알림", "로그", "모니터링", "크롤러"]
+  - name: "운영 자동화 · 개발 환경"
+    keywords: ["CI/CD", "자동화", "패치", "WSUS", "배포", "개발 환경"]
+ai_group: "AI 활용"
+etc_group: "기타"
 ---
 <!DOCTYPE html>
 <html lang="ko">
@@ -18,8 +34,8 @@ extra_projects: []
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <link rel="stylesheet" href="assets/style.css" />
+  <link rel="stylesheet" href="assets/side-toc.css" />
   <style>
-    html { scroll-behavior: smooth; }
     .fact {
       display: flex;
       gap: 1rem;
@@ -34,153 +50,149 @@ extra_projects: []
       padding-top: 0.1rem;
     }
     .fact p { margin: 0; }
-    .project { margin-bottom: 1.8rem; scroll-margin-top: 1rem; }
+    .project { margin-bottom: 1.8rem; }
     .project:last-child { margin-bottom: 0; }
     .project h3 { margin-bottom: 0.8rem; }
     .detail-link { margin-top: 0.6rem; font-weight: 500; }
-
-    /* 상단 목차 */
-    .project-toc {
-      border: 1px solid rgba(127, 127, 127, 0.25);
-      border-radius: 10px;
-      padding: 1rem 1.2rem;
-      margin: 1.5rem 0 2rem;
-      scroll-margin-top: 1rem;
-    }
-    .toc-group + .toc-group { margin-top: 1rem; }
-    .toc-title {
-      font-size: 0.95rem;
-      font-weight: 700;
+    .group-heading {
+      font-size: 1rem;
       color: var(--accent);
-      margin: 0 0 0.4rem;
+      margin: 2rem 0 1rem;
+      padding-bottom: 0.3rem;
+      border-bottom: 1px solid var(--border);
     }
-    .toc-title a { color: inherit; text-decoration: none; }
-    .project-toc ol {
-      margin: 0;
-      padding-left: 1.4rem;
-      columns: 2;
-      column-gap: 2rem;
-      font-size: 0.95rem;
-    }
-    .project-toc li { margin: 0.2rem 0; break-inside: avoid; }
-    .project-toc a { text-decoration: none; }
-    .project-toc a:hover { text-decoration: underline; }
-    @media (max-width: 640px) {
-      .project-toc ol { columns: 1; }
-    }
-
-    /* 목차로 돌아가기 버튼 */
-    .to-toc {
-      position: fixed;
-      right: 1.2rem;
-      bottom: 1.2rem;
-      padding: 0.5rem 0.9rem;
-      border-radius: 999px;
-      background: var(--accent);
-      color: #fff;
-      font-size: 0.9rem;
-      font-weight: 600;
-      text-decoration: none;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
-      z-index: 10;
-    }
-    .to-toc:hover { opacity: 0.9; }
+    .group-heading.first { margin-top: 0.5rem; }
   </style>
 </head>
 <body>
   {% assign project_pages = site.pages | where: "type", "project" %}
   {% assign projects = project_pages | concat: page.extra_projects | sort: "order" %}
-  <main>
-    <a href="index.html" class="back-link">← 메인으로</a>
 
-    <header>
-      <p class="tagline">시스템 인프라 운영 관리자</p>
-      <h1>황태운의 대표 프로젝트</h1>
-      <p class="lead">실제 운영 환경에서 문제 해결을 위해 구축·적용한 프로젝트와, AI를 직접 학습·평가해 본 개인 프로젝트입니다.</p>
-    </header>
+  {% comment %} 프로젝트별 분야 계산 (projects 와 같은 순서의 배열) {% endcomment %}
+  {% assign pgroups = "" | split: "" %}
+  {% for p in projects %}
+    {% assign g = nil %}
+    {% if p.group %}
+      {% assign g = p.group %}
+    {% elsif p.category == "ai" %}
+      {% assign g = page.ai_group %}
+    {% else %}
+      {% for grp in page.groups %}
+        {% unless g %}
+          {% for kw in grp.keywords %}
+            {% if p.title contains kw %}{% assign g = grp.name %}{% break %}{% endif %}
+          {% endfor %}
+        {% endunless %}
+      {% endfor %}
+    {% endif %}
+    {% unless g %}{% assign g = page.etc_group %}{% endunless %}
+    {% assign pgroups = pgroups | push: g %}
+  {% endfor %}
 
-    <nav class="project-toc" id="toc" aria-label="프로젝트 목록">
-      <div class="toc-group">
-        <p class="toc-title"><a href="#infra">대표 프로젝트</a></p>
-        <ol>
-          {% for p in projects %}{% if p.category != "ai" %}
-          {% assign aid = p.anchor | default: p.url | slugify %}
-          <li><a href="#{{ aid }}">{{ p.title }}</a></li>
-          {% endif %}{% endfor %}
-        </ol>
-      </div>
-      <div class="toc-group">
-        <p class="toc-title"><a href="#ai">AI 활용</a></p>
-        <ol>
-          {% for p in projects %}{% if p.category == "ai" %}
-          {% assign aid = p.anchor | default: p.url | slugify %}
-          <li><a href="#{{ aid }}">{{ p.title }}</a></li>
-          {% endif %}{% endfor %}
-        </ol>
-      </div>
-    </nav>
+  {% assign infra_names = page.groups | map: "name" | push: page.etc_group %}
+  {% assign all_names = infra_names | push: page.ai_group %}
 
-    <section id="infra">
-      <h2>대표 프로젝트</h2>
-
-      {% for p in projects %}{% if p.category != "ai" %}
-      {% assign aid = p.anchor | default: p.url | slugify %}
-      <article class="project" id="{{ aid }}">
-        <h3>{{ p.title }}</h3>
-        <div class="facts">
-          <div class="fact">
-            <span class="fact-label">문제</span>
-            <p>{{ p.problem }}</p>
-          </div>
-          <div class="fact">
-            <span class="fact-label">조치</span>
-            <p>{{ p.action }}</p>
-          </div>
-          <div class="fact">
-            <span class="fact-label">결과</span>
-            <p>{{ p.result }}</p>
-          </div>
-        </div>
-        {% if p.url %}
-        <p class="detail-link"><a href="{{ p.url | relative_url }}">→ 상세 보기</a></p>
+  <div class="page-layout">
+    <details class="side-toc" id="toc" open>
+      <summary>프로젝트 목록</summary>
+      {% for gname in all_names %}
+        {% assign cnt = 0 %}
+        {% for p in projects %}{% if pgroups[forloop.index0] == gname %}{% assign cnt = cnt | plus: 1 %}{% endif %}{% endfor %}
+        {% if cnt > 0 %}
+        <details class="toc-group" open>
+          <summary>{{ gname }}<span class="count">{{ cnt }}</span></summary>
+          <ul>
+            {% for p in projects %}{% if pgroups[forloop.index0] == gname %}
+            {% assign aid = p.anchor | default: p.url | slugify %}
+            <li><a href="#{{ aid }}">{{ p.short_title | default: p.title }}</a></li>
+            {% endif %}{% endfor %}
+          </ul>
+        </details>
         {% endif %}
-      </article>
-      {% endif %}{% endfor %}
-    </section>
+      {% endfor %}
+    </details>
 
-    <section id="ai">
-      <h2>AI 활용</h2>
-      <p class="lead">GPU가 없는 개인 PC 대신 Google Colab에서 모델을 학습하고, 운영 관점(오탐·설명 가능성·재현성)으로 평가한 프로젝트입니다.</p>
-      {% for p in projects %}{% if p.category == "ai" %}
-      {% assign aid = p.anchor | default: p.url | slugify %}
-      <article class="project" id="{{ aid }}">
-        <h3>{{ p.title }}</h3>
-        <div class="facts">
-          <div class="fact">
-            <span class="fact-label">문제</span>
-            <p>{{ p.problem }}</p>
+    <main>
+      <a href="index.html" class="back-link">← 메인으로</a>
+
+      <header>
+        <p class="tagline">시스템 인프라 운영 관리자</p>
+        <h1>황태운의 대표 프로젝트</h1>
+        <p class="lead">실제 운영 환경에서 문제 해결을 위해 구축·적용한 프로젝트와, AI를 직접 학습·평가해 본 개인 프로젝트입니다.</p>
+      </header>
+
+      <section id="infra">
+        <h2>대표 프로젝트</h2>
+        {% assign first_done = false %}
+        {% for gname in infra_names %}
+          {% assign cnt = 0 %}
+          {% for p in projects %}{% if pgroups[forloop.index0] == gname %}{% assign cnt = cnt | plus: 1 %}{% endif %}{% endfor %}
+          {% if cnt > 0 %}
+          <h3 class="group-heading{% unless first_done %} first{% endunless %}">{{ gname }}</h3>
+          {% assign first_done = true %}
+          {% for p in projects %}{% if pgroups[forloop.index0] == gname %}
+          {% assign aid = p.anchor | default: p.url | slugify %}
+          <article class="project" id="{{ aid }}">
+            <h3>{{ p.title }}</h3>
+            <div class="facts">
+              <div class="fact">
+                <span class="fact-label">문제</span>
+                <p>{{ p.problem }}</p>
+              </div>
+              <div class="fact">
+                <span class="fact-label">조치</span>
+                <p>{{ p.action }}</p>
+              </div>
+              <div class="fact">
+                <span class="fact-label">결과</span>
+                <p>{{ p.result }}</p>
+              </div>
+            </div>
+            {% if p.url %}
+            <p class="detail-link"><a href="{{ p.url | relative_url }}">→ 상세 보기</a></p>
+            {% endif %}
+          </article>
+          {% endif %}{% endfor %}
+          {% endif %}
+        {% endfor %}
+      </section>
+
+      <section id="ai">
+        <h2>{{ page.ai_group }}</h2>
+        <p class="lead">GPU가 없는 개인 PC 대신 Google Colab에서 모델을 학습하고, 운영 관점(오탐·설명 가능성·재현성)으로 평가한 프로젝트입니다.</p>
+        {% for p in projects %}{% if pgroups[forloop.index0] == page.ai_group %}
+        {% assign aid = p.anchor | default: p.url | slugify %}
+        <article class="project" id="{{ aid }}">
+          <h3>{{ p.title }}</h3>
+          <div class="facts">
+            <div class="fact">
+              <span class="fact-label">문제</span>
+              <p>{{ p.problem }}</p>
+            </div>
+            <div class="fact">
+              <span class="fact-label">조치</span>
+              <p>{{ p.action }}</p>
+            </div>
+            <div class="fact">
+              <span class="fact-label">결과</span>
+              <p>{{ p.result }}</p>
+            </div>
           </div>
-          <div class="fact">
-            <span class="fact-label">조치</span>
-            <p>{{ p.action }}</p>
-          </div>
-          <div class="fact">
-            <span class="fact-label">결과</span>
-            <p>{{ p.result }}</p>
-          </div>
-        </div>
-        {% if p.url %}
-        <p class="detail-link"><a href="{{ p.url | relative_url }}">→ 상세 보기</a></p>
-        {% endif %}
-      </article>
-      {% endif %}{% endfor %}
-    </section>
-  </main>
+          {% if p.url %}
+          <p class="detail-link"><a href="{{ p.url | relative_url }}">→ 상세 보기</a></p>
+          {% endif %}
+        </article>
+        {% endif %}{% endfor %}
+      </section>
+    </main>
+  </div>
 
   <a href="#toc" class="to-toc">↑ 목록</a>
 
   <footer>
     <p>황태운 · 시스템 인프라 운영 관리자</p>
   </footer>
+
+  <script src="assets/side-toc.js"></script>
 </body>
 </html>

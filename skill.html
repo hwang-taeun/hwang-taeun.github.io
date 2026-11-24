@@ -3,6 +3,7 @@
 #  - 상세 페이지가 있는 항목: skills/ 또는 projects/ 하위 index.html 머리말에 skill_group, skill 등록
 #  - 상세 페이지가 없는 항목: 아래 basics 에 등록
 #  - skill_groups 순서대로 소제목이 나오고, 그룹 안에서는 skill_order 순으로 정렬
+#  - 왼쪽 목차는 skill_groups 로 자동 생성
 skill_groups:
   - OS & 시스템 관리
   - 웹 & 네트워크 서비스
@@ -126,45 +127,62 @@ basics:
       text-align: center;
     }
   </style>
+  <link rel="stylesheet" href="assets/side-toc.css" />
 </head>
 <body>
-  <main>
-    <a href="index.html" class="back-link">← 메인으로</a>
+  {% assign linked_pages = site.pages | where_exp: "p", "p.skill_group != nil" %}
+  {% assign projects_page = site.pages | where: "name", "projects.html" | first %}
+  {% assign extra_projects = projects_page.extra_projects | where_exp: "p", "p.skill_group != nil" %}
+  {% assign items = linked_pages | concat: extra_projects | concat: page.basics %}
 
-    <header>
-      <p class="tagline">시스템 인프라 운영 관리자</p>
-      <h1>황태운의 스킬 상세</h1>
-      <p class="lead">실제 운영 환경에서 사용한 기술 스택입니다. 마지막 "AI 활용"은 운영 업무에 AI를 붙여 보거나 직접 학습·평가해 본 항목입니다.</p>
-    </header>
-
-    <section>
-      <h2>운영 분야 스킬셋</h2>
-
-      {% assign linked_pages = site.pages | where_exp: "p", "p.skill_group != nil" %}
-      {% assign projects_page = site.pages | where: "name", "projects.html" | first %}
-      {% assign extra_projects = projects_page.extra_projects | where_exp: "p", "p.skill_group != nil" %}
-      {% assign items = linked_pages | concat: extra_projects | concat: page.basics %}
-
-      {% for group in page.skill_groups %}
-      <h3>{{ group | replace: "&", "&amp;" }}</h3>
-      <ul>
-        {% assign group_items = items | where: "skill_group", group | sort: "skill_order" %}
-        {% for it in group_items %}
-        <li>{{ it.skill }}
-          {% if it.url %}
-          <a href="{{ it.url | relative_url }}" class="skill-link">→ {{ it.link_label | default: it.title }}</a>
-          {% elsif it.anchor %}
-          <a href="{{ '/projects.html#' | append: it.anchor | relative_url }}" class="skill-link">→ {{ it.link_label | default: it.title }}</a>
-          {% endif %}
-        </li>
+  <div class="page-layout">
+    <details class="side-toc" id="toc" open>
+      <summary>스킬 분야</summary>
+      <ol>
+        {% for group in page.skill_groups %}
+        {% assign group_items = items | where: "skill_group", group %}
+        <li><a href="#skill-group-{{ forloop.index }}">{{ group | replace: "&", "&amp;" }}<span class="count">{{ group_items.size }}</span></a></li>
         {% endfor %}
-      </ul>
-      {% endfor %}
-    </section>
-  </main>
+      </ol>
+    </details>
+
+    <main>
+      <a href="index.html" class="back-link">← 메인으로</a>
+
+      <header>
+        <p class="tagline">시스템 인프라 운영 관리자</p>
+        <h1>황태운의 스킬 상세</h1>
+        <p class="lead">실제 운영 환경에서 사용한 기술 스택입니다. 마지막 "AI 활용"은 운영 업무에 AI를 붙여 보거나 직접 학습·평가해 본 항목입니다.</p>
+      </header>
+
+      <section>
+        <h2>운영 분야 스킬셋</h2>
+
+        {% for group in page.skill_groups %}
+        <h3 id="skill-group-{{ forloop.index }}">{{ group | replace: "&", "&amp;" }}</h3>
+        <ul>
+          {% assign group_items = items | where: "skill_group", group | sort: "skill_order" %}
+          {% for it in group_items %}
+          <li>{{ it.skill }}
+            {% if it.url %}
+            <a href="{{ it.url | relative_url }}" class="skill-link">→ {{ it.link_label | default: it.title }}</a>
+            {% elsif it.anchor %}
+            <a href="{{ '/projects.html#' | append: it.anchor | relative_url }}" class="skill-link">→ {{ it.link_label | default: it.title }}</a>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+        {% endfor %}
+      </section>
+    </main>
+  </div>
+
+  <a href="#toc" class="to-toc">↑ 목차</a>
 
   <footer>
     <p>황태운 · 시스템 인프라 운영 관리자</p>
   </footer>
+
+  <script src="assets/side-toc.js"></script>
 </body>
 </html>
