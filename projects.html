@@ -3,6 +3,7 @@
 #  - 상세 페이지가 있는 프로젝트: projects/<폴더>/index.html 머리말에 type: project 로 등록
 #  - 상세 페이지가 없는 프로젝트: 아래 extra_projects 에 등록 (형식은 상세 페이지 머리말과 동일 + anchor)
 #  - 머리말에 category: ai 를 넣으면 아래 "AI 활용" 섹션으로 분류
+#  - 상단 목차는 같은 목록으로 자동 생성 (anchor 가 없으면 상세 페이지 주소로 id 생성)
 extra_projects: []
 ---
 <!DOCTYPE html>
@@ -18,6 +19,7 @@ extra_projects: []
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <link rel="stylesheet" href="assets/style.css" />
   <style>
+    html { scroll-behavior: smooth; }
     .fact {
       display: flex;
       gap: 1rem;
@@ -36,9 +38,58 @@ extra_projects: []
     .project:last-child { margin-bottom: 0; }
     .project h3 { margin-bottom: 0.8rem; }
     .detail-link { margin-top: 0.6rem; font-weight: 500; }
+
+    /* 상단 목차 */
+    .project-toc {
+      border: 1px solid rgba(127, 127, 127, 0.25);
+      border-radius: 10px;
+      padding: 1rem 1.2rem;
+      margin: 1.5rem 0 2rem;
+      scroll-margin-top: 1rem;
+    }
+    .toc-group + .toc-group { margin-top: 1rem; }
+    .toc-title {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--accent);
+      margin: 0 0 0.4rem;
+    }
+    .toc-title a { color: inherit; text-decoration: none; }
+    .project-toc ol {
+      margin: 0;
+      padding-left: 1.4rem;
+      columns: 2;
+      column-gap: 2rem;
+      font-size: 0.95rem;
+    }
+    .project-toc li { margin: 0.2rem 0; break-inside: avoid; }
+    .project-toc a { text-decoration: none; }
+    .project-toc a:hover { text-decoration: underline; }
+    @media (max-width: 640px) {
+      .project-toc ol { columns: 1; }
+    }
+
+    /* 목차로 돌아가기 버튼 */
+    .to-toc {
+      position: fixed;
+      right: 1.2rem;
+      bottom: 1.2rem;
+      padding: 0.5rem 0.9rem;
+      border-radius: 999px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 0.9rem;
+      font-weight: 600;
+      text-decoration: none;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+      z-index: 10;
+    }
+    .to-toc:hover { opacity: 0.9; }
   </style>
 </head>
 <body>
+  {% assign project_pages = site.pages | where: "type", "project" %}
+  {% assign projects = project_pages | concat: page.extra_projects | sort: "order" %}
   <main>
     <a href="index.html" class="back-link">← 메인으로</a>
 
@@ -46,16 +97,35 @@ extra_projects: []
       <p class="tagline">시스템 인프라 운영 관리자</p>
       <h1>황태운의 대표 프로젝트</h1>
       <p class="lead">실제 운영 환경에서 문제 해결을 위해 구축·적용한 프로젝트와, AI를 직접 학습·평가해 본 개인 프로젝트입니다.</p>
-      <p><a href="#infra">대표 프로젝트</a> · <a href="#ai">AI 활용</a></p>
     </header>
+
+    <nav class="project-toc" id="toc" aria-label="프로젝트 목록">
+      <div class="toc-group">
+        <p class="toc-title"><a href="#infra">대표 프로젝트</a></p>
+        <ol>
+          {% for p in projects %}{% if p.category != "ai" %}
+          {% assign aid = p.anchor | default: p.url | slugify %}
+          <li><a href="#{{ aid }}">{{ p.title }}</a></li>
+          {% endif %}{% endfor %}
+        </ol>
+      </div>
+      <div class="toc-group">
+        <p class="toc-title"><a href="#ai">AI 활용</a></p>
+        <ol>
+          {% for p in projects %}{% if p.category == "ai" %}
+          {% assign aid = p.anchor | default: p.url | slugify %}
+          <li><a href="#{{ aid }}">{{ p.title }}</a></li>
+          {% endif %}{% endfor %}
+        </ol>
+      </div>
+    </nav>
 
     <section id="infra">
       <h2>대표 프로젝트</h2>
 
-      {% assign project_pages = site.pages | where: "type", "project" %}
-      {% assign projects = project_pages | concat: page.extra_projects | sort: "order" %}
       {% for p in projects %}{% if p.category != "ai" %}
-      <article class="project" id="{{ p.anchor }}">
+      {% assign aid = p.anchor | default: p.url | slugify %}
+      <article class="project" id="{{ aid }}">
         <h3>{{ p.title }}</h3>
         <div class="facts">
           <div class="fact">
@@ -82,7 +152,8 @@ extra_projects: []
       <h2>AI 활용</h2>
       <p class="lead">GPU가 없는 개인 PC 대신 Google Colab에서 모델을 학습하고, 운영 관점(오탐·설명 가능성·재현성)으로 평가한 프로젝트입니다.</p>
       {% for p in projects %}{% if p.category == "ai" %}
-      <article class="project" id="{{ p.anchor }}">
+      {% assign aid = p.anchor | default: p.url | slugify %}
+      <article class="project" id="{{ aid }}">
         <h3>{{ p.title }}</h3>
         <div class="facts">
           <div class="fact">
@@ -105,6 +176,8 @@ extra_projects: []
       {% endif %}{% endfor %}
     </section>
   </main>
+
+  <a href="#toc" class="to-toc">↑ 목록</a>
 
   <footer>
     <p>황태운 · 시스템 인프라 운영 관리자</p>
