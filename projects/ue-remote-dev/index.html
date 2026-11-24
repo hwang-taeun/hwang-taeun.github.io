@@ -1,307 +1,325 @@
 ---
+title: 언리얼 엔진 원격 C++ 개발 환경 구축 (VS Code Remote Tunnels)
+short_title: 언리얼 원격 C++ 개발 환경
 type: project
-order: 13
-title: "언리얼 엔진 원격 C++ 개발 환경 구축 (VS Code Remote Tunnels)"
-problem: "8GB 태블릿으로는 언리얼 에디터를 실행할 수 없고, 테더링 환경이라 원격 데스크톱(RDP)은 데이터 사용량이 부담"
-action: "32GB 집 PC에 VS 2026(MSVC 14.44)과 UE 5.8.4를 구성하고, VS Code Remote Tunnels로 태블릿에서 코드 편집과 빌드만 원격 실행"
-result: "다른 네트워크 대역의 태블릿에서 텍스트만 주고받으며 C++ 원격 빌드 성공, 화면이 필요할 때만 저비트레이트 스트리밍으로 데이터 절감"
+anchor: ue-remote-dev
+order: 210
+featured: false
+summary: 집 PC에서 UE 5.8 빌드, 태블릿에서 VS Code 터널로 원격 코딩
+problem: >-
+  8GB 태블릿으로는 언리얼 에디터를 실행할 수 없고, 테더링 환경이라 원격 데스크톱(RDP)은 데이터 사용량이 부담이었습니다.
+  집 PC와 태블릿은 서로 다른 네트워크 대역이었습니다.
+action: >-
+  32GB 집 PC에 Visual Studio 2026(MSVC 14.44)과 Unreal Engine 5.8.4를 구성하고, VS Code Remote Tunnels를 서비스로 등록해
+  태블릿에서는 코드 편집과 빌드 명령만 원격으로 실행하도록 구성했습니다.
+result: >-
+  포트포워딩·VPN 없이 다른 네트워크의 태블릿에서 C++ 원격 빌드에 성공했고, 텍스트만 오가므로 테더링 데이터를 거의 쓰지 않습니다.
+link_label: 언리얼 원격 C++ 개발 환경
 ---
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>언리얼 엔진 원격 C++ 개발 환경 구축 — 집 PC × 태블릿</title>
-<style>
-  :root{
-    --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --line:#2a2f3a;
-    --text:#e6e8ec; --muted:#9aa3b2; --accent:#4ea1ff; --ok:#3fb950; --warn:#f0b429; --err:#f85149;
-    --pc:#8b5cf6; --tab:#14b8a6;
-    --mono:"D2Coding","Consolas","SFMono-Regular",monospace;
-  }
-  *{box-sizing:border-box}
-  html{scroll-behavior:smooth}
-  body{margin:0;background:var(--bg);color:var(--text);font:16px/1.7 "Pretendard","Noto Sans KR","Malgun Gothic",system-ui,sans-serif}
-  a{color:var(--accent)}
-  .wrap{max-width:1040px;margin:0 auto;padding:0 20px}
-  header{padding:64px 0 32px;border-bottom:1px solid var(--line)}
-  header .eyebrow{color:var(--accent);font-weight:700;letter-spacing:.04em;font-size:14px}
-  h1{font-size:34px;line-height:1.3;margin:8px 0 12px}
-  header p{color:var(--muted);margin:0 0 20px;max-width:760px}
-  .chips{display:flex;flex-wrap:wrap;gap:8px}
-  .chip{background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:4px 12px;font-size:13px;color:var(--muted)}
-  .chip b{color:var(--text);font-weight:600}
-  nav.toc{position:sticky;top:0;z-index:5;background:rgba(15,17,21,.92);backdrop-filter:blur(6px);border-bottom:1px solid var(--line)}
-  nav.toc .wrap{display:flex;gap:4px;overflow-x:auto;padding-top:8px;padding-bottom:8px}
-  nav.toc a{white-space:nowrap;text-decoration:none;color:var(--muted);font-size:14px;padding:4px 10px;border-radius:6px}
-  nav.toc a:hover{background:var(--panel2);color:var(--text)}
-  section{padding:48px 0;border-bottom:1px solid var(--line)}
-  h2{font-size:24px;margin:0 0 6px}
-  h2 .num{color:var(--accent);margin-right:8px}
-  h3{font-size:18px;margin:32px 0 10px}
-  .lead{color:var(--muted);margin:0 0 20px}
-  table{width:100%;border-collapse:collapse;margin:12px 0 8px;font-size:15px}
-  th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;vertical-align:top}
-  th{background:var(--panel2);font-weight:600}
-  code{font-family:var(--mono);background:var(--panel2);border:1px solid var(--line);border-radius:4px;padding:1px 6px;font-size:.9em}
-  pre{font-family:var(--mono);background:#0b0d11;border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;font-size:14px;line-height:1.6;margin:12px 0}
-  pre code{background:none;border:0;padding:0}
-  .dev{display:inline-block;font-size:12px;font-weight:700;border-radius:4px;padding:1px 8px;margin-right:6px;vertical-align:2px}
-  .dev.pc{background:rgba(139,92,246,.18);color:#c4b5fd;border:1px solid rgba(139,92,246,.5)}
-  .dev.tab{background:rgba(20,184,166,.15);color:#5eead4;border:1px solid rgba(20,184,166,.5)}
-  ol.steps{padding-left:22px;margin:8px 0}
-  ol.steps li{margin:6px 0}
-  .callout{border-left:4px solid var(--accent);background:var(--panel);border-radius:0 8px 8px 0;padding:12px 16px;margin:16px 0}
-  .callout.warn{border-color:var(--warn)}
-  .callout.err{border-color:var(--err)}
-  .callout.ok{border-color:var(--ok)}
-  .callout b.t{display:block;margin-bottom:2px}
-  .gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin:16px 0}
-  .gallery.one{grid-template-columns:1fr}
-  figure{margin:0;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
-  figure a{display:block;background:#000}
-  figure img{display:block;width:100%;height:auto;max-height:520px;object-fit:contain}
-  figcaption{padding:10px 14px;font-size:14px;color:var(--muted)}
-  figcaption b{color:var(--text);margin-right:6px;font-family:var(--mono)}
-  .arch{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;align-items:center;gap:10px;margin:20px 0}
-  .node{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;min-height:150px}
-  .node h4{margin:0 0 6px;font-size:16px}
-  .node ul{margin:0;padding-left:18px;color:var(--muted);font-size:14px}
-  .node.tab{border-color:rgba(20,184,166,.6)}
-  .node.pc{border-color:rgba(139,92,246,.6)}
-  .arrow{color:var(--muted);font-size:13px;text-align:center;line-height:1.4}
-  .arrow span{display:block;font-size:22px;color:var(--text)}
-  .flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:12px 0}
-  .flow .box{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:6px 12px;font-size:14px}
-  .flow .sep{color:var(--muted)}
-  footer{padding:32px 0 64px;color:var(--muted);font-size:14px}
-  @media (max-width:760px){
-    h1{font-size:26px}
-    .arch{grid-template-columns:1fr}
-    .arrow span{transform:rotate(90deg)}
-  }
-</style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>언리얼 엔진 원격 C++ 개발 환경 구축 (VS Code Remote Tunnels) — 황태운</title>
+  <meta name="description" content="집 PC에 Unreal Engine 5.8과 Visual Studio 2026을 구성하고, VS Code Remote Tunnels로 태블릿에서 원격 C++ 빌드를 하는 환경 구축 과정" />
+  <meta name="theme-color" content="#1a73e8" />
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="stylesheet" href="../../assets/style.css" />
+  <style>
+    nav ol { columns: 2; column-gap: 2em; padding-left: 1.4em; margin: 1em 0 0; }
+    nav a { text-decoration: none; }
+    nav a:hover { text-decoration: underline; }
+    .table-wrap { overflow-x: auto; margin: 0.6rem 0 1rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+    th, td { border: 1px solid var(--border); padding: 0.5rem 0.7rem; text-align: left; vertical-align: top; }
+    th { background: var(--accent-soft); color: var(--accent); font-weight: 700; white-space: nowrap; }
+    pre { overflow-x: auto; }
+    .screenshot { margin: 0.8rem 0 1.2rem; }
+    .screenshot img { display: block; max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 8px; }
+    .screenshot figcaption { margin-top: 0.4rem; color: var(--muted); font-size: 0.88rem; }
+    .note { background: var(--accent-soft); border-left: 4px solid var(--accent); padding: 12px 16px; border-radius: 6px; margin: 1.2em 0; }
+    .where { display: inline-block; font-size: 0.82rem; font-weight: 700; color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 0.05rem 0.5rem; margin-right: 0.3rem; }
+    @media (max-width: 600px) { nav ol { columns: 1; } }
+  </style>
 </head>
 <body>
+  <main>
+    <a href="../../index.html" class="back-link">← 메인으로</a>
 
-<header>
-  <div class="wrap">
-    <div class="eyebrow">SETUP LOG · 2026-11-24</div>
-    <h1>언리얼 엔진 원격 C++ 개발 환경 구축<br>집 PC에서 빌드하고, 태블릿에서 코딩하기</h1>
-    <p>8GB 태블릿으로는 언리얼 에디터를 돌릴 수 없고, 테더링 환경이라 원격 데스크톱(RDP)은 데이터 사용량이 부담이었습니다. 그래서 엔진은 32GB 집 PC에서 돌리고, 태블릿에서는 <b>VS Code Remote Tunnels</b>로 텍스트만 주고받으며 C++ 코드를 작성하고 빌드하는 환경을 만들었습니다.</p>
-    <div class="chips">
-      <span class="chip"><b>Unreal Engine</b> 5.8.4</span>
-      <span class="chip"><b>Visual Studio</b> Community 2026 (18.12.1)</span>
-      <span class="chip"><b>MSVC</b> v143 14.44</span>
-      <span class="chip"><b>Windows SDK</b> 10.0.26100</span>
-      <span class="chip"><b>VS Code</b> 1.147 + Remote Tunnels</span>
-      <span class="chip"><b>집 PC</b> 6코어 / 32GB</span>
-      <span class="chip"><b>태블릿</b> Windows / 8GB / 테더링</span>
-    </div>
-  </div>
-</header>
+    <header>
+      <p class="tagline">시스템 인프라 운영</p>
+      <h1>언리얼 엔진 원격 C++ 개발 환경 구축 (VS Code Remote Tunnels)</h1>
+      <p class="lead">엔진과 컴파일러는 32GB 집 PC에서 실행하고, 8GB 태블릿에서는 VS Code Remote Tunnels로 텍스트만 주고받으며 C++ 코드를 작성하고 빌드하는 환경을 구성했습니다.</p>
+      <nav aria-label="목차">
+        <ol>
+          <li><a href="#overview">개요 및 구성</a></li>
+          <li><a href="#decisions">주요 결정 사항</a></li>
+          <li><a href="#vs">Visual Studio 2026 설치</a></li>
+          <li><a href="#ue">Unreal Engine 5.8.4 설치</a></li>
+          <li><a href="#project">C++ 프로젝트 생성</a></li>
+          <li><a href="#vscode">언리얼 ↔ VS Code 연동</a></li>
+          <li><a href="#tunnel">Remote Tunnel 구성</a></li>
+          <li><a href="#tablet">태블릿에서 접속</a></li>
+          <li><a href="#build">원격 빌드</a></li>
+          <li><a href="#trouble">트러블슈팅</a></li>
+          <li><a href="#daily">운영 방식</a></li>
+        </ol>
+      </nav>
+    </header>
 
-<nav class="toc">
-  <div class="wrap">
-    <a href="#arch">구성</a>
-    <a href="#decisions">결정 사항</a>
-    <a href="#s1">1. Visual Studio</a>
-    <a href="#s2">2. UE 5.8 설치</a>
-    <a href="#s3">3. C++ 프로젝트</a>
-    <a href="#s4">4. VS Code 연동</a>
-    <a href="#s5">5. 원격 터널</a>
-    <a href="#s6">6. 태블릿 접속</a>
-    <a href="#s7">7. 원격 빌드</a>
-    <a href="#trouble">트러블슈팅</a>
-    <a href="#daily">일상 사용법</a>
-  </div>
-</nav>
-
-<main class="wrap">
-
-<section id="arch">
-  <h2>전체 구성</h2>
-  <p class="lead">태블릿은 화면과 입력만 담당합니다. 코드, 컴파일러, 엔진은 모두 집 PC에 있습니다.</p>
-  <div class="arch">
-    <div class="node tab">
-      <h4>📱 태블릿</h4>
+    <section id="overview">
+      <h2>1. 개요 및 구성</h2>
       <ul>
-        <li>브라우저 <code>vscode.dev</code></li>
-        <li>또는 VS Code + Remote - Tunnels</li>
-        <li>편집, 저장, 빌드 명령</li>
+        <li><strong>집 PC (<code>main-pc</code>)</strong>: 6코어 / 32GB, Unreal Engine 5.8.4, Visual Studio Community 2026 (18.12.1), MSVC v143 14.44, Windows SDK 10.0.26100</li>
+        <li><strong>태블릿</strong>: Windows / 8GB, 테더링 사용, 집 PC와 다른 네트워크 대역</li>
+        <li><strong>연결</strong>: VS Code Remote Tunnels (GitHub 계정 인증, Microsoft 중계 서버 경유)</li>
       </ul>
-    </div>
-    <div class="arrow"><span>⇄</span>HTTPS<br>텍스트만 전송</div>
-    <div class="node">
-      <h4>☁️ Microsoft 터널 중계</h4>
-      <ul>
-        <li>GitHub 계정으로 인증</li>
-        <li>다른 네트워크 대역이어도 접속</li>
-        <li>포트포워딩, VPN 불필요</li>
-      </ul>
-    </div>
-    <div class="arrow"><span>⇄</span>터널 서비스<br>(상시 실행)</div>
-    <div class="node pc">
-      <h4>🖥️ 집 PC (<code>main-pc</code>)</h4>
-      <ul>
-        <li>VS Code 터널 서비스</li>
-        <li>UE 5.8.4 + UnrealBuildTool</li>
-        <li>MSVC 14.44 컴파일</li>
-        <li>프로젝트 <code>E:\UE\MyProject</code></li>
-      </ul>
-    </div>
-  </div>
-</section>
+      <h3>접속 구성</h3>
+<pre><code>태블릿 (vscode.dev / VS Code) --https--&gt; Microsoft 터널 중계 &lt;--https-- 집 PC (VS Code 터널 서비스)
+                                                                     └─ UnrealBuildTool → MSVC 14.44 컴파일</code></pre>
+      <p>태블릿은 화면과 입력만 담당하고, 코드·컴파일러·엔진은 모두 집 PC에 있습니다. 포트포워딩이나 VPN이 필요 없습니다.</p>
+    </section>
 
-<section id="decisions">
-  <h2>주요 결정 사항</h2>
-  <p class="lead">진행하면서 바꾼 선택과 그 이유입니다.</p>
-  <table>
-    <tr><th>결정</th><th>이유</th></tr>
-    <tr><td>WSL 대신 Windows에 직접 설치</td><td>WSL2는 Vulkan GPU 가속이 불안정해서 언리얼 에디터를 쓰기 어려움</td></tr>
-    <tr><td>태블릿에는 엔진을 설치하지 않음</td><td>8GB RAM으로는 에디터 실행이 불가. 엔진은 32GB 집 PC에서만 실행</td></tr>
-    <tr><td>RDP 대신 VS Code Remote Tunnels</td><td>테더링 데이터 절약. 코드 작업은 텍스트만 오가서 데이터를 거의 쓰지 않음</td></tr>
-    <tr><td>화면이 필요할 때만 Moonlight 스트리밍</td><td>720p, 30fps, 2Mbps로 제한하면 시간당 약 0.9GB 수준으로 예측 가능</td></tr>
-    <tr><td>UE 5.4.4를 지우고 5.8.4 설치</td><td>5.4는 VS 2026을 지원하지 않음. 5.8은 VS 2026을 정식 지원</td></tr>
-    <tr><td>MSVC v143 14.44 빌드 도구 추가</td><td>VS 2026 기본 컴파일러(14.50) 외에 언리얼이 검증한 툴체인을 확보</td></tr>
-    <tr><td>프로젝트 경로 <code>E:\UE</code></td><td>기본 경로가 OneDrive 동기화 폴더이고 한글(<code>문서</code>)이 포함되어 빌드 문제 위험</td></tr>
-    <tr><td>설치 옵션 최소화</td><td>디버그 심볼(53GB), 다른 플랫폼 제외 → 다운로드 11.6GB, 설치 29.5GB</td></tr>
-  </table>
-</section>
+    <section id="decisions">
+      <h2>2. 주요 결정 사항</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>결정</th><th>이유</th></tr></thead>
+          <tbody>
+            <tr><td>WSL 대신 Windows에 직접 설치</td><td>WSL2는 Vulkan GPU 가속이 불안정해 언리얼 에디터 사용이 어려움</td></tr>
+            <tr><td>태블릿에는 엔진 미설치</td><td>8GB RAM으로는 에디터 실행 불가. 엔진은 집 PC에서만 실행</td></tr>
+            <tr><td>RDP 대신 VS Code Remote Tunnels</td><td>테더링 데이터 절약. 코드 작업은 텍스트만 오감</td></tr>
+            <tr><td>화면이 필요할 때만 Moonlight 스트리밍</td><td>720p · 30fps · 2Mbps로 제한하면 시간당 약 0.9GB로 예측 가능</td></tr>
+            <tr><td>UE 5.4.4 제거 후 5.8.4 설치</td><td>5.4는 VS 2026 미지원, 5.8은 VS 2026 정식 지원</td></tr>
+            <tr><td>MSVC v143 14.44 빌드 도구 추가</td><td>VS 2026 기본 컴파일러(14.50) 외에 언리얼이 검증한 툴체인 확보</td></tr>
+            <tr><td>프로젝트 경로 <code>E:\UE</code></td><td>기본 경로는 OneDrive 동기화 폴더이고 한글(<code>문서</code>)이 포함되어 빌드 문제 위험</td></tr>
+            <tr><td>엔진 설치 옵션 최소화</td><td>디버그 심볼(53GB)과 다른 플랫폼 제외 → 다운로드 11.6GB, 설치 29.5GB</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
 
-<section id="s1">
-  <h2><span class="num">1</span>Visual Studio 2026 설치</h2>
-  <p class="lead"><span class="dev pc">🖥️ 집 PC</span>언리얼 C++ 빌드에 필요한 컴파일러와 SDK를 설치합니다.</p>
-  <ol class="steps">
-    <li>워크로드에서 <b>C++를 사용한 게임 개발</b>을 선택합니다.</li>
-    <li>선택 구성 요소에서 <b>Windows 11 SDK (10.0.26100)</b>와 <b>Visual Studio Tools for Unreal Engine</b>이 체크됐는지 확인합니다. <b>Unreal Engine 설치 관리자</b>는 런처가 있으니 해제합니다.</li>
-    <li><b>개별 구성 요소</b> 탭에서 <code>14.44</code>로 검색하고, <b>MSVC v143 - VS 2022 C++ x64/x86 빌드 도구 (v14.44-17.14)</b> 하나만 추가합니다. ATL, MFC, Spectre, ARM 항목은 필요 없습니다.</li>
-  </ol>
-  <div class="gallery">
-    <figure><a href="images/01-vs-workload-cpp-game-details.png" target="_blank"><img loading="lazy" src="images/01-vs-workload-cpp-game-details.png" alt=""></a><figcaption><b>01</b>C++를 사용한 게임 개발 워크로드 세부 정보</figcaption></figure>
-    <figure><a href="images/02-vs-workloads-desktop-mobile.png" target="_blank"><img loading="lazy" src="images/02-vs-workloads-desktop-mobile.png" alt=""></a><figcaption><b>02</b>데스크톱 및 모바일 워크로드는 선택하지 않음</figcaption></figure>
-    <figure><a href="images/03-vs-workload-game-cpp-checked.png" target="_blank"><img loading="lazy" src="images/03-vs-workload-game-cpp-checked.png" alt=""></a><figcaption><b>03</b>게임 → C++를 사용한 게임 개발 체크</figcaption></figure>
-    <figure><a href="images/04-vs-workloads-other-toolsets.png" target="_blank"><img loading="lazy" src="images/04-vs-workloads-other-toolsets.png" alt=""></a><figcaption><b>04</b>기타 도구 집합도 선택하지 않음</figcaption></figure>
-    <figure><a href="images/05-vs-install-details-optional.png" target="_blank"><img loading="lazy" src="images/05-vs-install-details-optional.png" alt=""></a><figcaption><b>05</b>선택 구성 요소: SDK 26100, VS Tools for Unreal</figcaption></figure>
-    <figure><a href="images/06-vs-components-v143-search.png" target="_blank"><img loading="lazy" src="images/06-vs-components-v143-search.png" alt=""></a><figcaption><b>06</b>v143으로 검색하면 항목이 너무 많음</figcaption></figure>
-    <figure><a href="images/07-vs-components-14.44-search.png" target="_blank"><img loading="lazy" src="images/07-vs-components-14.44-search.png" alt=""></a><figcaption><b>07</b>14.44로 검색 범위 좁히기</figcaption></figure>
-    <figure><a href="images/08-vs-msvc-v143-14.44-checked.png" target="_blank"><img loading="lazy" src="images/08-vs-msvc-v143-14.44-checked.png" alt=""></a><figcaption><b>08</b>MSVC v143 x64/x86 빌드 도구 (v14.44) 하나만 선택</figcaption></figure>
-    <figure><a href="images/09-vs-installer-done.png" target="_blank"><img loading="lazy" src="images/09-vs-installer-done.png" alt=""></a><figcaption><b>09</b>VS Community 2026 설치 완료</figcaption></figure>
-    <figure><a href="images/10-vscode-installed.png" target="_blank"><img loading="lazy" src="images/10-vscode-installed.png" alt=""></a><figcaption><b>10</b>VS Code 1.147 설치</figcaption></figure>
-  </div>
-</section>
+    <section id="vs">
+      <h2>3. Visual Studio 2026 설치</h2>
+      <p><span class="where">집 PC</span>언리얼 C++ 빌드에 필요한 컴파일러와 SDK를 설치합니다.</p>
+      <ol>
+        <li>워크로드에서 <strong>C++를 사용한 게임 개발</strong>을 선택합니다.</li>
+        <li>선택 구성 요소에서 <strong>Windows 11 SDK (10.0.26100)</strong>, <strong>Visual Studio Tools for Unreal Engine</strong>을 확인합니다. <strong>Unreal Engine 설치 관리자</strong>는 런처가 있으므로 해제합니다.</li>
+        <li><strong>개별 구성 요소</strong>에서 <code>14.44</code>로 검색해 <strong>MSVC v143 - VS 2022 C++ x64/x86 빌드 도구 (v14.44-17.14)</strong> 하나만 추가합니다. ATL, MFC, Spectre, ARM 항목은 필요 없습니다.</li>
+      </ol>
+      <figure class="screenshot">
+        <img src="images/03-vs-workload-game-cpp-checked.png" alt="게임 워크로드에서 C++를 사용한 게임 개발 체크" loading="lazy" />
+        <figcaption>워크로드: C++를 사용한 게임 개발</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/01-vs-workload-cpp-game-details.png" alt="C++를 사용한 게임 개발 설치 세부 정보" loading="lazy" />
+        <figcaption>설치 세부 정보</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/02-vs-workloads-desktop-mobile.png" alt="데스크톱 및 모바일 워크로드 목록" loading="lazy" />
+        <figcaption>데스크톱 및 모바일 워크로드는 선택하지 않음</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/04-vs-workloads-other-toolsets.png" alt="기타 도구 집합 워크로드 목록" loading="lazy" />
+        <figcaption>기타 도구 집합도 선택하지 않음</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/05-vs-install-details-optional.png" alt="선택 구성 요소 목록, SDK 26100과 VS Tools for Unreal 체크" loading="lazy" />
+        <figcaption>선택 구성 요소: SDK 26100, VS Tools for Unreal Engine</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/06-vs-components-v143-search.png" alt="v143 검색 결과, ATL과 MFC 항목이 많이 나옴" loading="lazy" />
+        <figcaption>v143으로 검색하면 ATL·MFC 항목이 너무 많음</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/07-vs-components-14.44-search.png" alt="14.44로 검색한 결과" loading="lazy" />
+        <figcaption>14.44로 검색 범위를 좁힘</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/08-vs-msvc-v143-14.44-checked.png" alt="MSVC v143 x64/x86 빌드 도구 14.44 체크" loading="lazy" />
+        <figcaption>컴파일러, 빌드 도구 및 런타임에서 x64/x86 빌드 도구 하나만 선택</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/09-vs-installer-done.png" alt="Visual Studio Community 2026 설치 완료" loading="lazy" />
+        <figcaption>Visual Studio Community 2026 설치 완료</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/10-vscode-installed.png" alt="VS Code 1.147 릴리스 정보 화면" loading="lazy" />
+        <figcaption>VS Code 1.147 설치</figcaption>
+      </figure>
+    </section>
 
-<section id="s2">
-  <h2><span class="num">2</span>Unreal Engine 5.8.4 설치</h2>
-  <p class="lead"><span class="dev pc">🖥️ 집 PC</span>Epic Games Launcher에서 엔진 버전을 교체합니다.</p>
-  <div class="callout warn"><b class="t">UE 5.4는 VS 2026과 맞지 않음</b>기존에 설치된 5.4.4는 VS 2022 전용입니다. VS 2026을 쓰려면 5.8 이상이 필요해서 5.4.4를 제거하고 5.8.4를 설치했습니다.</div>
-  <ol class="steps">
-    <li>라이브러리 → <b>엔진 버전 옆 <code>+</code></b> → 버전을 <b>5.8.4</b>로 선택하고 설치합니다. 5.9 Preview는 실습용으로 피했습니다.</li>
-    <li><b>설치 옵션</b>에서 코어 컴포넌트, 템플릿 &amp; 피처 팩, 엔진 소스만 남깁니다. 메타휴먼, <b>디버깅 심볼(53GB)</b>, 모든 타깃 플랫폼은 해제합니다.</li>
-  </ol>
-  <div class="gallery">
-    <figure><a href="images/11-epic-launcher-ue544.png" target="_blank"><img loading="lazy" src="images/11-epic-launcher-ue544.png" alt=""></a><figcaption><b>11</b>기존 엔진 버전 확인: 5.4.4</figcaption></figure>
-    <figure><a href="images/12-epic-ue544-remove-ue584-queued.png" target="_blank"><img loading="lazy" src="images/12-epic-ue544-remove-ue584-queued.png" alt=""></a><figcaption><b>12</b>5.4.4 제거, 5.8.4는 대기열</figcaption></figure>
-    <figure><a href="images/13-epic-ue584-install-menu.png" target="_blank"><img loading="lazy" src="images/13-epic-ue584-install-menu.png" alt=""></a><figcaption><b>13</b>5.8.4 설치 메뉴</figcaption></figure>
-    <figure><a href="images/14-ue584-install-options.png" target="_blank"><img loading="lazy" src="images/14-ue584-install-options.png" alt=""></a><figcaption><b>14</b>설치 옵션: 코어, 템플릿, 엔진 소스만</figcaption></figure>
-    <figure><a href="images/15-ue584-target-platforms.png" target="_blank"><img loading="lazy" src="images/15-ue584-target-platforms.png" alt=""></a><figcaption><b>15</b>타깃 플랫폼 전부 해제 → 다운로드 11.6GB</figcaption></figure>
-    <figure><a href="images/16-ue584-installed.png" target="_blank"><img loading="lazy" src="images/16-ue584-installed.png" alt=""></a><figcaption><b>16</b>5.8.4 설치 완료 (29.5GiB)</figcaption></figure>
-  </div>
-</section>
+    <section id="ue">
+      <h2>4. Unreal Engine 5.8.4 설치</h2>
+      <p><span class="where">집 PC</span>Epic Games Launcher에서 엔진 버전을 교체합니다.</p>
+      <div class="note">기존에 설치된 UE 5.4.4는 VS 2022 전용이라 VS 2026을 인식하지 못합니다. 5.4.4를 제거하고 VS 2026을 정식 지원하는 5.8.4를 설치했습니다.</div>
+      <ol>
+        <li>라이브러리 → <strong>엔진 버전 옆 <code>+</code></strong> → 버전을 <strong>5.8.4</strong>로 선택하고 설치합니다. (5.9 Preview는 제외)</li>
+        <li>설치가 시작된 뒤 ▼ → <strong>옵션</strong>에서 코어 컴포넌트, 템플릿 &amp; 피처 팩, 엔진 소스만 남기고 메타휴먼, 디버깅 심볼, 모든 타깃 플랫폼을 해제합니다.</li>
+      </ol>
+      <figure class="screenshot">
+        <img src="images/11-epic-launcher-ue544.png" alt="Epic Games Launcher에 설치된 Unreal Engine 5.4.4" loading="lazy" />
+        <figcaption>기존 엔진 버전 5.4.4</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/12-epic-ue544-remove-ue584-queued.png" alt="5.4.4 제거 중, 5.8.4 대기열" loading="lazy" />
+        <figcaption>5.4.4 제거, 5.8.4는 대기열</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/13-epic-ue584-install-menu.png" alt="5.8.4 설치 버튼과 메뉴" loading="lazy" />
+        <figcaption>5.8.4 설치 메뉴 (옵션은 설치 시작 후 표시)</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/14-ue584-install-options.png" alt="설치 옵션: 코어 컴포넌트, 템플릿, 엔진 소스만 선택" loading="lazy" />
+        <figcaption>설치 옵션: 디버깅 심볼(53.8GB) 제외</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/15-ue584-target-platforms.png" alt="타깃 플랫폼 모두 해제, 다운로드 11.6GB" loading="lazy" />
+        <figcaption>타깃 플랫폼 전부 해제 → 다운로드 11.6GB, 설치 29.5GB</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/16-ue584-installed.png" alt="Unreal Engine 5.8.4 설치 완료" loading="lazy" />
+        <figcaption>5.8.4 설치 완료</figcaption>
+      </figure>
+    </section>
 
-<section id="s3">
-  <h2><span class="num">3</span>C++ 프로젝트 만들기</h2>
-  <p class="lead"><span class="dev pc">🖥️ 집 PC</span>5.8에서는 메뉴 이름이 조금 바뀌었습니다.</p>
-  <ol class="steps">
-    <li>홈 패널의 <b>⊕ 새 프로젝트</b>를 누릅니다. 위쪽의 "게임" 버튼은 학습 자료 카테고리일 뿐입니다.</li>
-    <li><b>게임 → 기본</b> 템플릿을 선택합니다. 예전의 "공백(Blank)"이 5.8에서 "기본"으로 바뀌었습니다. <b>Intro To Unreal</b>은 블루프린트 전용이라 C++ 선택지가 없습니다.</li>
-    <li>프로젝트 디폴트를 <b>C++</b>로 바꾸고, 위치는 <code>E:\UE</code>, 이름은 <code>MyProject</code>로 정합니다.</li>
-  </ol>
-  <div class="callout warn"><b class="t">기본 경로를 쓰지 말 것</b>기본 위치 <code>C:\Users\…\OneDrive\문서\Unreal Projects</code>는 OneDrive가 빌드 임시 파일(수 GB)까지 동기화하고, 한글 경로 때문에 빌드 오류가 날 수 있습니다.</div>
-  <div class="gallery">
-    <figure><a href="images/17-ue58-home-panel.png" target="_blank"><img loading="lazy" src="images/17-ue58-home-panel.png" alt=""></a><figcaption><b>17</b>5.8 홈 패널 → 왼쪽 위 "새 프로젝트"</figcaption></figure>
-    <figure><a href="images/18-ue58-new-project-intro.png" target="_blank"><img loading="lazy" src="images/18-ue58-new-project-intro.png" alt=""></a><figcaption><b>18</b>Intro To Unreal은 블루프린트만 가능, 경로도 OneDrive</figcaption></figure>
-    <figure><a href="images/19-ue58-new-project-basic-cpp.png" target="_blank"><img loading="lazy" src="images/19-ue58-new-project-basic-cpp.png" alt=""></a><figcaption><b>19</b>기본 + C++, E:\UE\MyProject</figcaption></figure>
-    <figure><a href="images/20-ue58-editor-opened.png" target="_blank"><img loading="lazy" src="images/20-ue58-editor-opened.png" alt=""></a><figcaption><b>20</b>첫 컴파일 후 에디터 실행 성공</figcaption></figure>
-  </div>
-</section>
+    <section id="project">
+      <h2>5. C++ 프로젝트 생성</h2>
+      <p><span class="where">집 PC</span>5.8에서는 템플릿 이름이 일부 바뀌었습니다.</p>
+      <ol>
+        <li>홈 패널의 <strong>새 프로젝트</strong>를 누릅니다. 위쪽 "게임" 버튼은 학습 자료 카테고리입니다.</li>
+        <li><strong>게임 → 기본</strong> 템플릿을 선택합니다. 예전 "공백(Blank)"이 "기본"으로 바뀌었고, <strong>Intro To Unreal</strong>은 블루프린트 전용입니다.</li>
+        <li>프로젝트 디폴트를 <strong>C++</strong>, 위치 <code>E:\UE</code>, 이름 <code>MyProject</code>로 지정합니다.</li>
+      </ol>
+      <div class="note">기본 위치 <code>C:\Users\…\OneDrive\문서\Unreal Projects</code>는 OneDrive가 빌드 임시 파일(수 GB)까지 동기화하고, 한글 경로 때문에 빌드 오류가 날 수 있어 사용하지 않았습니다.</div>
+      <figure class="screenshot">
+        <img src="images/17-ue58-home-panel.png" alt="언리얼 엔진 5.8 홈 패널" loading="lazy" />
+        <figcaption>5.8 홈 패널 → 새 프로젝트</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/18-ue58-new-project-intro.png" alt="Intro To Unreal 템플릿, 블루프린트만 선택 가능" loading="lazy" />
+        <figcaption>Intro To Unreal은 블루프린트 전용, 기본 경로는 OneDrive</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/19-ue58-new-project-basic-cpp.png" alt="기본 템플릿, C++, E:\UE\MyProject" loading="lazy" />
+        <figcaption>기본 템플릿 + C++, <code>E:\UE\MyProject</code></figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/20-ue58-editor-opened.png" alt="첫 컴파일 후 언리얼 에디터 실행" loading="lazy" />
+        <figcaption>첫 컴파일 후 에디터 실행 성공</figcaption>
+      </figure>
+    </section>
 
-<section id="s4">
-  <h2><span class="num">4</span>언리얼 ↔ VS Code 연동</h2>
-  <p class="lead"><span class="dev pc">🖥️ 집 PC</span>언리얼이 VS Code용 설정 파일(자동완성, 빌드 작업)을 만들게 합니다.</p>
-  <ol class="steps">
-    <li>언리얼 에디터 <b>편집 → 에디터 개인설정 → 일반 → 소스 코드</b>에서 소스 코드 에디터를 <b>Visual Studio Code</b>로 바꾸고 에디터를 재시작합니다.</li>
-    <li>VS Code에 <b>C/C++</b> (Microsoft) 확장을 설치합니다.</li>
-    <li>언리얼 <b>툴 → Visual Studio Code 프로젝트 생성</b>을 실행합니다.</li>
-    <li>프로젝트 폴더에 <code>.vscode</code> 폴더와 <code>MyProject.code-workspace</code>가 생기면 완료입니다. 이후 <b>언리얼 에디터는 닫습니다.</b> 에디터가 켜져 있으면 외부 빌드가 실패합니다.</li>
-  </ol>
-  <div class="gallery">
-    <figure><a href="images/21-editor-pref-source-code-vscode.png" target="_blank"><img loading="lazy" src="images/21-editor-pref-source-code-vscode.png" alt=""></a><figcaption><b>21</b>소스 코드 에디터 → Visual Studio Code (재시작 필요)</figcaption></figure>
-    <figure><a href="images/22-home-vscode-cpp-extension.png" target="_blank"><img loading="lazy" src="images/22-home-vscode-cpp-extension.png" alt=""></a><figcaption><b>22</b>집 PC VS Code에 C/C++ 확장 설치</figcaption></figure>
-    <figure><a href="images/23-tools-generate-vscode-project.png" target="_blank"><img loading="lazy" src="images/23-tools-generate-vscode-project.png" alt=""></a><figcaption><b>23</b>툴 → Visual Studio Code 프로젝트 생성</figcaption></figure>
-    <figure><a href="images/24-project-folder-workspace-created.png" target="_blank"><img loading="lazy" src="images/24-project-folder-workspace-created.png" alt=""></a><figcaption><b>24</b>.vscode 폴더와 MyProject.code-workspace 생성</figcaption></figure>
-  </div>
-  <h3>메뉴가 안 보일 때: 명령어로 생성</h3>
+    <section id="vscode">
+      <h2>6. 언리얼 ↔ VS Code 연동</h2>
+      <p><span class="where">집 PC</span>언리얼이 VS Code용 설정(IntelliSense, 빌드 작업)을 생성하게 합니다.</p>
+      <ol>
+        <li><strong>편집 → 에디터 개인설정 → 일반 → 소스 코드</strong>에서 소스 코드 에디터를 <strong>Visual Studio Code</strong>로 바꾸고 에디터를 재시작합니다.</li>
+        <li>VS Code에 <strong>C/C++</strong> (Microsoft) 확장을 설치합니다.</li>
+        <li><strong>툴 → Visual Studio Code 프로젝트 생성</strong>을 실행합니다.</li>
+        <li><code>.vscode</code> 폴더와 <code>MyProject.code-workspace</code>가 생기면 완료입니다. 이후 <strong>언리얼 에디터는 종료</strong>합니다. 에디터가 켜져 있으면 DLL이 잠겨 외부 빌드가 실패합니다.</li>
+      </ol>
+      <figure class="screenshot">
+        <img src="images/21-editor-pref-source-code-vscode.png" alt="에디터 개인설정 소스 코드 에디터를 Visual Studio Code로 변경" loading="lazy" />
+        <figcaption>소스 코드 에디터 → Visual Studio Code (재시작 필요)</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/22-home-vscode-cpp-extension.png" alt="VS Code C/C++ 확장 설치 화면" loading="lazy" />
+        <figcaption>집 PC VS Code에 C/C++ 확장 설치</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/23-tools-generate-vscode-project.png" alt="툴 메뉴의 Visual Studio Code 프로젝트 생성" loading="lazy" />
+        <figcaption>툴 → Visual Studio Code 프로젝트 생성</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/24-project-folder-workspace-created.png" alt="프로젝트 폴더에 .vscode와 code-workspace 생성" loading="lazy" />
+        <figcaption><code>.vscode</code>와 <code>MyProject.code-workspace</code> 생성 확인</figcaption>
+      </figure>
+      <h3>메뉴가 없을 때: 명령어로 생성</h3>
 <pre><code>cd E:\UE\MyProject
 $UE   = "C:\Program Files\Epic Games\UE_5.8"
 $PROJ = "$PWD\MyProject.uproject"
 $UBT  = "$UE\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe"
 
 &amp; $UBT -projectfiles -project="$PROJ" -game -vscode</code></pre>
-</section>
+    </section>
 
-<section id="s5">
-  <h2><span class="num">5</span>Remote Tunnel 켜기</h2>
-  <p class="lead"><span class="dev pc">🖥️ 집 PC</span>집 PC를 어디서든 접속할 수 있는 원격 개발 서버로 만듭니다.</p>
-  <ol class="steps">
-    <li><code>Ctrl+Shift+P</code> → <b>Remote Tunnels: Turn on Remote Tunnel Access...</b></li>
-    <li><b>Install as a service</b>를 선택합니다. 재부팅하거나 VS Code를 닫아도 터널이 유지됩니다.</li>
-    <li><b>GitHub</b> 계정(<code>hwang-taeun</code>)으로 로그인합니다.</li>
-    <li>머신 이름은 묻지 않고 <b><code>main-pc</code></b>로 자동 지정됐습니다. 계정 메뉴에 <b>Remote Tunnel Access is On</b>이 보이면 성공입니다.</li>
-    <li>Windows <b>설정 → 시스템 → 전원</b>에서 절전 모드 전환을 <b>안 함</b>으로 바꿉니다.</li>
-  </ol>
-  <div class="gallery">
-    <figure><a href="images/25-home-tunnel-command.png" target="_blank"><img loading="lazy" src="images/25-home-tunnel-command.png" alt=""></a><figcaption><b>25</b>Turn on Remote Tunnel Access 선택</figcaption></figure>
-    <figure><a href="images/26-github-auth-redirect.png" target="_blank"><img loading="lazy" src="images/26-github-auth-redirect.png" alt=""></a><figcaption><b>26</b>GitHub 로그인 후 VS Code로 돌아가기</figcaption></figure>
-    <figure><a href="images/27-home-vscode-after-login.png" target="_blank"><img loading="lazy" src="images/27-home-vscode-after-login.png" alt=""></a><figcaption><b>27</b>로그인 완료 (이름 입력 단계 없음)</figcaption></figure>
-    <figure><a href="images/28-home-tunnel-access-on.png" target="_blank"><img loading="lazy" src="images/28-home-tunnel-access-on.png" alt=""></a><figcaption><b>28</b>계정 메뉴: Remote Tunnel Access is On</figcaption></figure>
-    <figure><a href="images/29-home-tunnel-menu-main-pc.png" target="_blank"><img loading="lazy" src="images/29-home-tunnel-menu-main-pc.png" alt=""></a><figcaption><b>29</b>터널 이름 main-pc 확인</figcaption></figure>
-    <figure><a href="images/30-home-tunnel-copy-uri.png" target="_blank"><img loading="lazy" src="images/30-home-tunnel-copy-uri.png" alt=""></a><figcaption><b>30</b>Copy Browser URI로 접속 주소 복사</figcaption></figure>
-  </div>
-  <div class="callout"><b class="t">복사된 주소의 의미</b>
-    <code>vscode.dev/tunnel/<b>main-pc</b>/<b>e:/프로그램</b>?vscode-lang=ko</code>에서 <code>main-pc</code>는 터널 이름, 그 뒤는 집 PC VS Code에 열려 있던 폴더입니다. 언리얼 프로젝트로 바로 가려면 경로 부분만 바꾸면 됩니다.
+    <section id="tunnel">
+      <h2>7. Remote Tunnel 구성</h2>
+      <p><span class="where">집 PC</span>집 PC를 어디서든 접속 가능한 원격 개발 서버로 만듭니다.</p>
+      <ol>
+        <li><code>Ctrl+Shift+P</code> → <strong>Remote Tunnels: Turn on Remote Tunnel Access...</strong></li>
+        <li><strong>Install as a service</strong>를 선택합니다. 재부팅하거나 VS Code를 닫아도 터널이 유지됩니다.</li>
+        <li>GitHub 계정으로 로그인합니다. 머신 이름은 별도 입력 없이 <code>main-pc</code>로 지정되었습니다.</li>
+        <li>Windows <strong>설정 → 시스템 → 전원</strong>에서 절전 모드 전환을 <strong>안 함</strong>으로 바꿉니다.</li>
+      </ol>
+      <figure class="screenshot">
+        <img src="images/25-home-tunnel-command.png" alt="명령 팔레트의 Remote Tunnels 명령 목록" loading="lazy" />
+        <figcaption>Turn on Remote Tunnel Access 선택</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/26-github-auth-redirect.png" alt="GitHub 인증 후 VS Code로 돌아가는 화면" loading="lazy" />
+        <figcaption>GitHub 로그인 후 VS Code로 복귀</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/27-home-vscode-after-login.png" alt="로그인 완료 후 VS Code 화면" loading="lazy" />
+        <figcaption>로그인 완료 (이름 입력 단계 없음)</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/28-home-tunnel-access-on.png" alt="계정 메뉴의 Remote Tunnel Access is On" loading="lazy" />
+        <figcaption>계정 메뉴: Remote Tunnel Access is On</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/29-home-tunnel-menu-main-pc.png" alt="터널 메뉴, 이름 main-pc" loading="lazy" />
+        <figcaption>터널 이름 <code>main-pc</code> 확인</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/30-home-tunnel-copy-uri.png" alt="Copy Browser URI to Clipboard 선택" loading="lazy" />
+        <figcaption>Copy Browser URI로 접속 주소 복사</figcaption>
+      </figure>
+      <p>복사한 주소는 <code>vscode.dev/tunnel/&lt;터널 이름&gt;/&lt;열려 있던 폴더&gt;</code> 형식입니다. 경로 부분만 바꾸면 프로젝트로 바로 들어갈 수 있습니다.</p>
 <pre><code>https://vscode.dev/tunnel/main-pc/e:/UE/MyProject?vscode-lang=ko</code></pre>
-  </div>
-</section>
+    </section>
 
-<section id="s6">
-  <h2><span class="num">6</span>태블릿에서 접속</h2>
-  <p class="lead"><span class="dev tab">📱 태블릿</span>여기부터는 집 PC를 직접 만질 필요가 없습니다.</p>
-  <ol class="steps">
-    <li>브라우저에서 위 주소를 열고 같은 GitHub 계정으로 로그인합니다. 즐겨찾기에 추가해 둡니다.</li>
-    <li>알림의 <b>작업 영역 열기</b>를 눌러 MyProject와 UE5 폴더가 함께 보이는 작업 영역으로 전환합니다.</li>
-    <li><b>제한 모드</b>를 해제합니다. 신뢰 목록에 엔진 폴더, 프로젝트 폴더, 작업 영역 파일이 모두 등록되면 됩니다.</li>
-    <li>확장 탭에서 C/C++를 <b>main-pc에 설치</b>합니다. 원격 접속에서는 C/C++ 같은 확장이 코드가 있는 집 PC 쪽에서 실행되기 때문에, 태블릿이나 집 PC 로컬에 설치한 것과 별개로 한 번 더 설치해야 합니다.</li>
-  </ol>
-  <div class="gallery">
-    <figure><a href="images/31-tablet-vscodedev-connected.png" target="_blank"><img loading="lazy" src="images/31-tablet-vscodedev-connected.png" alt=""></a><figcaption><b>31</b>vscode.dev로 main-pc 접속 성공</figcaption></figure>
-    <figure><a href="images/32-tablet-workspace-opened.png" target="_blank"><img loading="lazy" src="images/32-tablet-workspace-opened.png" alt=""></a><figcaption><b>32</b>작업 영역(MyProject + UE5) 열기</figcaption></figure>
-    <figure><a href="images/33-tablet-trusted-folders.png" target="_blank"><img loading="lazy" src="images/33-tablet-trusted-folders.png" alt=""></a><figcaption><b>33</b>신뢰 목록 등록 완료 (추가 선택 창은 Esc)</figcaption></figure>
-    <figure><a href="images/34-tablet-cpp-ext-remote-install.png" target="_blank"><img loading="lazy" src="images/34-tablet-cpp-ext-remote-install.png" alt=""></a><figcaption><b>34</b>C/C++ 확장을 main-pc에 설치</figcaption></figure>
-  </div>
-</section>
+    <section id="tablet">
+      <h2>8. 태블릿에서 접속</h2>
+      <p><span class="where">태블릿</span>여기부터는 집 PC를 직접 조작하지 않습니다.</p>
+      <ol>
+        <li>브라우저에서 위 주소를 열고 같은 GitHub 계정으로 로그인합니다.</li>
+        <li><strong>작업 영역 열기</strong>로 MyProject와 UE5 폴더가 함께 보이는 작업 영역으로 전환합니다.</li>
+        <li><strong>제한 모드</strong>를 해제합니다. 엔진 폴더, 프로젝트 폴더, 작업 영역 파일이 신뢰 목록에 등록되면 됩니다.</li>
+        <li>확장 탭에서 C/C++를 <strong>main-pc에 설치</strong>합니다. 원격 접속에서 C/C++ 같은 작업 영역 확장은 코드가 있는 집 PC 쪽에서 실행되므로, 로컬 설치와 별개로 한 번 더 설치해야 합니다.</li>
+      </ol>
+      <figure class="screenshot">
+        <img src="images/31-tablet-vscodedev-connected.png" alt="태블릿 브라우저 vscode.dev로 main-pc 접속" loading="lazy" />
+        <figcaption>vscode.dev로 <code>main-pc</code> 접속 성공</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/32-tablet-workspace-opened.png" alt="MyProject와 UE5가 포함된 작업 영역" loading="lazy" />
+        <figcaption>작업 영역(MyProject + UE5) 열기</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/33-tablet-trusted-folders.png" alt="작업 영역 신뢰 목록" loading="lazy" />
+        <figcaption>신뢰 목록 등록 완료</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/34-tablet-cpp-ext-remote-install.png" alt="C/C++ 확장을 원격에 설치 중" loading="lazy" />
+        <figcaption>C/C++ 확장을 <code>main-pc</code>에 설치</figcaption>
+      </figure>
+    </section>
 
-<section id="s7">
-  <h2><span class="num">7</span>원격 빌드</h2>
-  <p class="lead"><span class="dev tab">📱 태블릿</span>에서 명령하면 <span class="dev pc">🖥️ 집 PC</span>에서 컴파일됩니다.</p>
-
-  <h3>방법 A: 빌드 작업 (추천)</h3>
-  <ol class="steps">
-    <li><code>Ctrl+Shift+P</code> → <b>작업: 기본 빌드 작업 구성</b> → <b><code>MyProjectEditor Win64 Development Build</code></b>를 한 번만 지정합니다.</li>
-    <li>이후에는 코드 수정 → <code>Ctrl+S</code> → <code>Ctrl+Shift+B</code>만 반복합니다.</li>
-  </ol>
-
-  <h3>방법 B: 터미널에서 직접</h3>
+    <section id="build">
+      <h2>9. 원격 빌드</h2>
+      <p><span class="where">태블릿</span>에서 실행하면 <span class="where">집 PC</span>에서 컴파일됩니다.</p>
+      <h3>빌드 작업 (기본)</h3>
+      <ol>
+        <li><code>Ctrl+Shift+P</code> → <strong>작업: 기본 빌드 작업 구성</strong> → <code>MyProjectEditor Win64 Development Build</code>를 한 번 지정합니다.</li>
+        <li>이후에는 코드 수정 → <code>Ctrl+S</code> → <code>Ctrl+Shift+B</code>만 반복합니다.</li>
+      </ol>
+      <h3>터미널에서 직접 빌드</h3>
 <pre><code>cd E:\UE\MyProject
 $UE    = "C:\Program Files\Epic Games\UE_5.8"
 $PROJ  = "$PWD\MyProject.uproject"
@@ -309,103 +327,110 @@ $NAME  = "MyProject"
 $BUILD = "$UE\Engine\Build\BatchFiles\Build.bat"
 
 &amp; $BUILD "${NAME}Editor" Win64 Development -Project="$PROJ" -WaitMutex</code></pre>
-
-  <div class="gallery">
-    <figure><a href="images/35-build-cli-succeeded.png" target="_blank"><img loading="lazy" src="images/35-build-cli-succeeded.png" alt=""></a><figcaption><b>35</b>첫 빌드: 바뀐 코드가 없어 0 action, hostname은 Main-PC</figcaption></figure>
-    <figure><a href="images/37-source-myproject-cpp.png" target="_blank"><img loading="lazy" src="images/37-source-myproject-cpp.png" alt=""></a><figcaption><b>37</b>Source/MyProject/MyProject.cpp에 테스트 주석 추가</figcaption></figure>
-  </div>
-
-  <h3>실제 컴파일 확인 로그</h3>
+      <figure class="screenshot">
+        <img src="images/35-build-cli-succeeded.png" alt="빌드 성공, 0 action, hostname Main-PC" loading="lazy" />
+        <figcaption>첫 빌드: 변경 코드가 없어 0 action, <code>hostname</code>은 Main-PC</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/37-source-myproject-cpp.png" alt="Source/MyProject/MyProject.cpp 파일" loading="lazy" />
+        <figcaption><code>Source/MyProject/MyProject.cpp</code>에 테스트 주석 추가</figcaption>
+      </figure>
+      <h3>실제 컴파일 확인</h3>
 <pre><code>Using Visual Studio 14.44.35230 toolchain (...\MSVC\14.44.35207) and Windows 10.0.26100.0 SDK
 Using Unreal Build Accelerator local executor to run 11 action(s)
-[8/11] Compile [x64] SharedPCH.Engine.Project.ValApi.ValExpApi.Cpp20.cpp
 [9/11] Compile [x64] MyProject.cpp
 [10/11] Link [x64] MyProject.exe
-[11/11] WriteMetadata MyProject.target [NoUba]
 Output binary: E:\UE\MyProject\Binaries\Win64\MyProject.exe
 
 Result: Succeeded
 Total execution time: 73.40 seconds</code></pre>
-  <div class="callout ok"><b class="t">완성</b>태블릿에서 수정한 <code>MyProject.cpp</code>가 집 PC에서 MSVC 14.44로 컴파일됐습니다. 오간 데이터는 텍스트뿐입니다.</div>
-</section>
+      <p>태블릿에서 수정한 코드가 집 PC의 MSVC 14.44로 컴파일되는 것을 확인했습니다.</p>
+    </section>
 
-<section id="trouble">
-  <h2>트러블슈팅</h2>
-  <p class="lead">진행 중에 실제로 겪은 문제들입니다.</p>
+    <section id="trouble">
+      <h2>10. 트러블슈팅</h2>
 
-  <h3>① 파일을 엉뚱한 위치에 만듦</h3>
-  <div class="callout err"><b class="t">증상</b>프로젝트 최상위에 <code>MyProject.cpp</code>를 새로 만들고 주석만 넣음</div>
-  <p>언리얼은 <b><code>Source/</code> 폴더 안의 모듈 코드만</b> 빌드합니다. 최상위 파일은 삭제하고 <code>Source/MyProject/MyProject.cpp</code>를 수정해야 합니다. 화면 위쪽 경로(breadcrumb)가 <code>MyProject &gt; Source &gt; MyProject &gt; MyProject.cpp</code>인지 확인하세요.</p>
-  <div class="gallery one">
-    <figure><a href="images/36-mistake-cpp-at-root.png" target="_blank"><img loading="lazy" src="images/36-mistake-cpp-at-root.png" alt=""></a><figcaption><b>36</b>경로가 MyProject &gt; MyProject.cpp (Source 밖)</figcaption></figure>
-  </div>
+      <h3>파일을 Source 밖에 생성</h3>
+      <p>프로젝트 최상위에 <code>MyProject.cpp</code>를 새로 만들어 수정했습니다. 언리얼은 <code>Source/</code> 아래 모듈 코드만 빌드하므로, 파일을 삭제하고 <code>Source/MyProject/MyProject.cpp</code>를 수정했습니다.</p>
+      <figure class="screenshot">
+        <img src="images/36-mistake-cpp-at-root.png" alt="경로가 MyProject > MyProject.cpp로 Source 밖에 생성된 파일" loading="lazy" />
+        <figcaption>경로 표시가 <code>MyProject &gt; MyProject.cpp</code> (Source 밖)</figcaption>
+      </figure>
 
-  <h3>② <code>'cl.exe'은(는) 내부 또는 외부 명령이 아닙니다</code></h3>
-  <div class="callout err"><b class="t">원인</b><code>Ctrl+Shift+B</code> 목록 맨 위의 <b>C/C++: cl.exe 활성 파일 빌드</b>를 선택함. C/C++ 확장이 자동으로 만든 단일 파일 빌드 작업이라 언리얼 프로젝트에는 쓸 수 없습니다.</div>
-  <p>해결: 기본 빌드 작업을 <code>MyProjectEditor Win64 Development Build</code>로 지정합니다. 로그의 깨진 글자는 한글 인코딩(CP949) 문제일 뿐입니다.</p>
-  <div class="gallery">
-    <figure><a href="images/38-build-task-list.png" target="_blank"><img loading="lazy" src="images/38-build-task-list.png" alt=""></a><figcaption><b>38</b>빌드 작업 목록: 맨 위 cl.exe 항목은 선택하지 말 것</figcaption></figure>
-    <figure><a href="images/39-error-cl-exe.png" target="_blank"><img loading="lazy" src="images/39-error-cl-exe.png" alt=""></a><figcaption><b>39</b>cl.exe 오류 (한글 깨짐)</figcaption></figure>
-  </div>
+      <h3><code>'cl.exe'은(는) 내부 또는 외부 명령이 아닙니다</code></h3>
+      <p><code>Ctrl+Shift+B</code> 목록 맨 위의 <strong>C/C++: cl.exe 활성 파일 빌드</strong>를 선택해서 발생했습니다. C/C++ 확장이 자동으로 만든 단일 파일 빌드 작업이라 언리얼 프로젝트에는 쓸 수 없습니다. 로그의 깨진 글자는 CP949 인코딩 문제입니다.</p>
+      <figure class="screenshot">
+        <img src="images/38-build-task-list.png" alt="빌드 작업 목록, 맨 위에 cl.exe 항목" loading="lazy" />
+        <figcaption>빌드 작업 목록: 맨 위 cl.exe 항목은 사용하지 않음</figcaption>
+      </figure>
+      <figure class="screenshot">
+        <img src="images/39-error-cl-exe.png" alt="cl.exe 오류 메시지" loading="lazy" />
+        <figcaption>cl.exe 오류</figcaption>
+      </figure>
 
-  <h3>③ <code>Targets cannot be built in the Debug configuration</code></h3>
-  <div class="callout err"><b class="t">원인</b><b>MyProject Win64 Debug Rebuild</b>를 선택함. 런처로 설치한 엔진에서는 Debug 구성을 쓸 수 없습니다.</div>
-  <table>
-    <tr><th>구성</th><th>런처 엔진</th><th>용도</th></tr>
-    <tr><td>Debug</td><td>❌</td><td>엔진까지 디버깅 (소스 빌드 엔진 전용)</td></tr>
-    <tr><td>DebugGame</td><td>✅</td><td>내 코드만 디버깅</td></tr>
-    <tr><td><b>Development</b></td><td>✅</td><td><b>평소 개발용</b></td></tr>
-    <tr><td>Shipping</td><td>✅</td><td>배포용</td></tr>
-  </table>
-  <p>또 <code>MyProject</code>(게임 실행 파일)와 <code>MyProjectEditor</code>(에디터용)는 다른 타깃입니다. 에디터에서 쓸 코드는 <b><code>MyProjectEditor</code></b>로 빌드합니다.</p>
-  <div class="gallery one">
-    <figure><a href="images/40-error-debug-config.png" target="_blank"><img loading="lazy" src="images/40-error-debug-config.png" alt=""></a><figcaption><b>40</b>Debug Rebuild 실패</figcaption></figure>
-  </div>
+      <h3><code>Targets cannot be built in the Debug configuration</code></h3>
+      <p><strong>MyProject Win64 Debug Rebuild</strong>를 선택해서 발생했습니다. 런처로 설치한 엔진은 Debug 구성을 지원하지 않습니다.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>구성</th><th>런처 엔진</th><th>용도</th></tr></thead>
+          <tbody>
+            <tr><td>Debug</td><td>불가</td><td>엔진까지 디버깅 (소스 빌드 엔진 전용)</td></tr>
+            <tr><td>DebugGame</td><td>가능</td><td>내 코드만 디버깅</td></tr>
+            <tr><td>Development</td><td>가능</td><td>평소 개발용</td></tr>
+            <tr><td>Shipping</td><td>가능</td><td>배포용</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><code>MyProject</code>(게임 실행 파일)와 <code>MyProjectEditor</code>(에디터용)는 다른 타깃이므로, 에디터에서 쓸 코드는 <code>MyProjectEditor</code>로 빌드합니다.</p>
+      <figure class="screenshot">
+        <img src="images/40-error-debug-config.png" alt="Debug 구성 빌드 실패 로그" loading="lazy" />
+        <figcaption>Debug Rebuild 실패</figcaption>
+      </figure>
 
-  <h3>④ 기타</h3>
-  <table>
-    <tr><th>상황</th><th>해결</th></tr>
-    <tr><td>UE 5.4에서 "컴파일러를 찾을 수 없음"</td><td>5.4는 VS 2026을 인식하지 못함 → 5.8 이상 사용 또는 VS 2022 Build Tools 추가 설치</td></tr>
-    <tr><td>설치 전에 옵션 메뉴가 없음</td><td>엔진 구성 요소 옵션은 설치를 시작한 뒤 ▼ 메뉴에 나타남</td></tr>
-    <tr><td>"VS Code 프로젝트 생성" 메뉴가 안 보임</td><td>소스 코드 에디터를 바꾼 뒤 에디터를 재시작해야 메뉴가 바뀜</td></tr>
-    <tr><td>원격 빌드가 파일 잠금으로 실패</td><td>집 PC에서 언리얼 에디터가 켜져 있으면 DLL이 잠김 → 에디터 종료</td></tr>
-    <tr><td>C/C++ 구성 경고 (compileCommands 없음)</td><td>첫 빌드 전에 나는 경고. 빌드 후 사라지며 무시해도 됨</td></tr>
-  </table>
-</section>
+      <h3>기타</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>상황</th><th>해결</th></tr></thead>
+          <tbody>
+            <tr><td>UE 5.4에서 컴파일러를 찾지 못함</td><td>5.4는 VS 2026 미인식 → 5.8 이상 사용 또는 VS 2022 Build Tools 추가</td></tr>
+            <tr><td>설치 전 옵션 메뉴가 없음</td><td>엔진 구성 요소 옵션은 설치를 시작한 뒤 ▼ 메뉴에 표시됨</td></tr>
+            <tr><td>"VS Code 프로젝트 생성" 메뉴 없음</td><td>소스 코드 에디터 변경 후 에디터 재시작 필요</td></tr>
+            <tr><td>원격 빌드 시 파일 잠금</td><td>집 PC 언리얼 에디터 종료</td></tr>
+            <tr><td>C/C++ 구성 경고 (compileCommands 없음)</td><td>첫 빌드 전 경고, 빌드 후 사라짐</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
 
-<section id="daily">
-  <h2>일상 사용법</h2>
-  <h3>코드 작업 (데이터 거의 없음)</h3>
-  <div class="flow">
-    <span class="box"><span class="dev tab">📱</span>즐겨찾기로 vscode.dev 접속</span><span class="sep">→</span>
-    <span class="box">Source/ 코드 수정</span><span class="sep">→</span>
-    <span class="box"><code>Ctrl+S</code></span><span class="sep">→</span>
-    <span class="box"><code>Ctrl+Shift+B</code></span><span class="sep">→</span>
-    <span class="box"><code>Result: Succeeded</code> 확인</span>
-  </div>
-  <h3>화면이 필요할 때만 스트리밍</h3>
-  <p>블루프린트, 레벨 배치, 뷰포트 확인처럼 화면이 필요할 때만 Moonlight(+ Sunshine, Tailscale)를 잠깐 켭니다.</p>
-  <table>
-    <tr><th>설정</th><th>시간당 데이터</th></tr>
-    <tr><td>10 Mbps (스트리밍 기본값 수준)</td><td>약 4.5 GB</td></tr>
-    <tr><td>5 Mbps</td><td>약 2.2 GB</td></tr>
-    <tr><td><b>2 Mbps (720p, 30fps) 추천</b></td><td><b>약 0.9 GB</b></td></tr>
-  </table>
-  <p>뷰포트 <b>Realtime 끄기</b>, <b>Use Less CPU when in Background</b> 켜기, 단색 바탕화면을 쓰면 화면 변화가 줄어 실제 사용량은 더 적어집니다.</p>
-  <h3>체크리스트</h3>
-  <ul>
-    <li>집 PC 절전 모드 "안 함"</li>
-    <li>원격 빌드할 때는 집 PC 언리얼 에디터 종료</li>
-    <li>기본 빌드 작업은 <code>MyProjectEditor Win64 Development Build</code></li>
-    <li>코드는 항상 <code>Source/</code> 안에서 수정</li>
-  </ul>
-</section>
+    <section id="daily">
+      <h2>11. 운영 방식</h2>
+      <h3>코드 작업</h3>
+      <p>즐겨찾기로 vscode.dev 접속 → <code>Source/</code> 코드 수정 → <code>Ctrl+S</code> → <code>Ctrl+Shift+B</code> → <code>Result: Succeeded</code> 확인. 텍스트만 오가므로 테더링 데이터를 거의 쓰지 않습니다.</p>
+      <h3>화면이 필요할 때</h3>
+      <p>블루프린트, 레벨 배치, 뷰포트 확인처럼 화면이 필요할 때만 Moonlight(+ Sunshine, Tailscale)를 비트레이트를 제한해 사용합니다.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>설정</th><th>시간당 데이터</th></tr></thead>
+          <tbody>
+            <tr><td>10 Mbps</td><td>약 4.5 GB</td></tr>
+            <tr><td>5 Mbps</td><td>약 2.2 GB</td></tr>
+            <tr><td>2 Mbps (720p, 30fps)</td><td>약 0.9 GB</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>뷰포트 Realtime 끄기, Use Less CPU when in Background 켜기, 단색 바탕화면을 쓰면 화면 변화가 줄어 실제 사용량은 더 적습니다.</p>
+      <h3>체크리스트</h3>
+      <ul>
+        <li>집 PC 절전 모드 "안 함"</li>
+        <li>원격 빌드 시 집 PC 언리얼 에디터 종료</li>
+        <li>기본 빌드 작업은 <code>MyProjectEditor Win64 Development Build</code></li>
+        <li>코드는 항상 <code>Source/</code> 안에서 수정</li>
+      </ul>
+    </section>
+  </main>
 
-</main>
-
-<footer>
-  <div class="wrap">2026-11-24 · Unreal Engine 5.8.4 · Visual Studio Community 2026 · VS Code Remote Tunnels</div>
-</footer>
-
+  <footer>
+    <p>황태운 · 시스템 인프라 운영 관리자</p>
+  </footer>
 </body>
 </html>
