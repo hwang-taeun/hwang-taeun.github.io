@@ -3,7 +3,8 @@
 #  - 상세 페이지가 있는 항목: skills/ 또는 projects/ 하위 index.html 머리말에 skill_group, skill 등록
 #  - 상세 페이지가 없는 항목: 아래 basics 에 등록
 #  - skill_groups 순서대로 소제목이 나오고, 그룹 안에서는 skill_order 순으로 정렬
-#  - 왼쪽 목차는 skill_groups 로 자동 생성
+#  - 왼쪽 목차는 skill_groups 로 자동 생성 (분야별 접기·펼치기)
+#  - 목차에 보일 짧은 이름: 항목에 toc_label 지정 → 없으면 skill 문장의 " — " 앞부분 (30자에서 자름)
 skill_groups:
   - OS & 시스템 관리
   - 웹 & 네트워크 서비스
@@ -138,12 +139,20 @@ basics:
   <div class="page-layout">
     <details class="side-toc" id="toc" open>
       <summary>스킬 분야</summary>
-      <ol>
-        {% for group in page.skill_groups %}
-        {% assign group_items = items | where: "skill_group", group %}
-        <li><a href="#skill-group-{{ forloop.index }}">{{ group | replace: "&", "&amp;" }}<span class="count">{{ group_items.size }}</span></a></li>
-        {% endfor %}
-      </ol>
+      {% for group in page.skill_groups %}
+      {% assign gi = forloop.index %}
+      {% assign group_items = items | where: "skill_group", group | sort: "skill_order" %}
+      <details class="toc-group">
+        <summary>{{ group | replace: "&", "&amp;" }}<span class="count">{{ group_items.size }}</span></summary>
+        <ul>
+          {% for it in group_items %}
+          {% assign short_skill = it.skill | split: " — " | first %}
+          {% assign label = it.toc_label | default: short_skill %}
+          <li><a href="#skill-{{ gi }}-{{ forloop.index }}" title="{{ it.skill | escape }}">{{ label | truncate: 30 }}</a></li>
+          {% endfor %}
+        </ul>
+      </details>
+      {% endfor %}
     </details>
 
     <main>
@@ -159,11 +168,12 @@ basics:
         <h2>운영 분야 스킬셋</h2>
 
         {% for group in page.skill_groups %}
-        <h3 id="skill-group-{{ forloop.index }}">{{ group | replace: "&", "&amp;" }}</h3>
+        {% assign gi = forloop.index %}
+        <h3 id="skill-group-{{ gi }}">{{ group | replace: "&", "&amp;" }}</h3>
         <ul>
           {% assign group_items = items | where: "skill_group", group | sort: "skill_order" %}
           {% for it in group_items %}
-          <li>{{ it.skill }}
+          <li id="skill-{{ gi }}-{{ forloop.index }}">{{ it.skill }}
             {% if it.url %}
             <a href="{{ it.url | relative_url }}" class="skill-link">→ {{ it.link_label | default: it.title }}</a>
             {% elsif it.anchor %}
